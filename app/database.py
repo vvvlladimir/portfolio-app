@@ -31,7 +31,6 @@ class Transaction(Base):
     currency = Column(String, nullable=False)
     shares = Column(Numeric(20, 8), nullable=False)
     value = Column(Numeric(20, 8), nullable=False)
-    filled_price = Column(Numeric(20, 8), nullable=False)
 
 class Price(Base):
     __tablename__ = "prices"

@@ -3,14 +3,53 @@ from sqlalchemy.orm import Session
 from fastapi import Depends
 from sqlalchemy import text
 from app.database import PortfolioHistory, Transaction, TickerInfo, Price, Position,get_db
-
+from app.models.transactions import TransactionType
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 import pandas as pd
 
+def get_rate(from_cur, to_cur, date, fx_rates, max_lag_days=30):
+    """
+    Возвращает курс from_cur -> to_cur на дату или ближайший прошлый.
+    Приоритет: прямая пара, затем обратная.
+    max_lag_days ограничивает, насколько далеко в прошлое можно уйти.
+    """
 
+    if from_cur == to_cur:
+        return 1.0
+
+    # строим пары
+    pair_direct = f"{from_cur}{to_cur}=X"
+    pair_inverse = f"{to_cur}{from_cur}=X"
+
+    # выбираем обе пары сразу
+    candidates = fx_rates[
+        (fx_rates["pair"].isin([pair_direct, pair_inverse]))
+        & (fx_rates["date"] <= date)
+        ].sort_values("date")
+
+    if candidates.empty:
+        raise ValueError(f"Нет курса для {from_cur}->{to_cur} на {date}")
+
+    # берём последнюю доступную запись
+    last_row = candidates.iloc[-1]
+
+    # проверяем давность курса
+    if (date - last_row["date"]).days > max_lag_days:
+        raise ValueError(
+            f"Нет свежего курса для {from_cur}->{to_cur} на {date}, "
+            f"последний: {last_row['date'].date()}"
+        )
+
+    # если это прямая пара → используем rate
+    if last_row["pair"] == pair_direct:
+        return float(last_row["rate"])
+
+    # иначе обратная → инверсия
+    return 1.0 / float(last_row["rate"])
 
 def calculate_portfolio_history(db: Session, base_currency: str = "USD") -> pd.DataFrame:
-    # --- 1. Позиции ---
     positions = (
         db.query(Position.date, Position.ticker, Position.market_value, TickerInfo.currency)
         .join(TickerInfo, Position.ticker == TickerInfo.ticker)
@@ -44,54 +83,77 @@ def calculate_portfolio_history(db: Session, base_currency: str = "USD") -> pd.D
     df_transactions["date"] = pd.to_datetime(df_transactions["date"])
     df_fx_rates["date"] = pd.to_datetime(df_fx_rates["date"])
 
-    df_positions["market_value"] = df_positions["market_value"].astype(float)
-    df_fx_rates["rate"] = df_fx_rates["rate"].astype(float)
-    print(df_positions.head())
-    print(df_transactions.head())
-    print(df_fx_rates.head())
+    def convert_value(row, base_currency, fx_rates, value_row = "value"):
+        rate = get_rate(row["currency"], base_currency, row["date"], fx_rates)
+        return float(row[value_row]) * rate
 
-    def make_pair(from_cur, to_cur):
-        if from_cur == to_cur:
-            return None
-        return f"{from_cur}{to_cur}=X"
 
-    # добавляем колонку с нужной парой
-    df_positions["pair"] = df_positions["currency"].apply(
-        lambda cur: make_pair(cur, base_currency)
+    df_positions["total_value"] = df_positions.apply(
+        lambda row: convert_value(row, base_currency, df_fx_rates, "market_value"),
+        axis=1
     )
 
-    # сортируем для merge_asof
-    df_positions = df_positions.sort_values("date")
-    df_fx_rates = df_fx_rates.sort_values("date")
-
-    # делаем merge_asof: берём последний доступный курс на дату
-    df_merged = pd.merge_asof(
-        df_positions,
-        df_fx_rates,
-        by="pair",
-        on="date",
-        direction="backward"  # берём ближайший прошлый курс
-    )
-
-    # ---------- Расчёт в базовой валюте ----------
-    def convert_value(row):
-        if row["currency"] == base_currency:
-            return float(row["market_value"])
-        else:
-            return float(row["market_value"]) * float(row["rate"])
-
-    df_merged["value_in_base"] = df_merged.apply(convert_value, axis=1)
-
-    # ---------- Итоговый портфель по датам ----------
     portfolio = (
-        df_merged.groupby("date")["value_in_base"]
+        df_positions.groupby("date")["total_value"]
         .sum()
         .reset_index()
     )
 
-    print(portfolio)
+    df_transactions["amount_in_base"] = df_transactions.apply(
+        lambda row: convert_value(row, base_currency, df_fx_rates, "value"),
+        axis=1
+    )
 
-calculate_portfolio_history(next(get_db()), base_currency="USD")
+    df_cashflows = (
+        df_transactions.groupby("date")
+        .apply(lambda df: pd.Series({
+            "gross_invested": df.loc[df["type"].isin(TransactionType.inflows()), "amount_in_base"].sum(),
+            "gross_withdrawn": df.loc[df["type"].isin(TransactionType.outflows()), "amount_in_base"].sum()
+        }))
+        .reset_index()
+    )
+
+
+    # ---------- Объединение ----------
+    report = pd.merge(
+        portfolio,
+        df_cashflows,
+        on="date",
+        how="outer"
+    ).fillna(0)
+    report["invested_value"] = report["gross_invested"].cumsum() - report["gross_withdrawn"].cumsum()
+
+    return report
+
+def upsert_portfolio_history(db: Session, base_currency: str = "EUR") -> int:
+    """
+    Пересчитывает и сохраняет историю портфеля в базу.
+    """
+
+    try:
+        inserted = 0
+        data = calculate_portfolio_history(db, base_currency)
+
+        db.query(PortfolioHistory).delete()
+        for _, row in data.iterrows():
+            stmt = insert(PortfolioHistory).values(
+                date=row["date"].date(),
+                total_value=float(row["total_value"]) if not pd.isna(row["total_value"]) else None,
+                invested_value=float(row["invested_value"]) if not pd.isna(row["invested_value"]) else None,
+                gross_invested=float(row["gross_invested"]) if not pd.isna(row["gross_invested"]) else None,
+                gross_withdrawn=float(row["gross_withdrawn"]) if not pd.isna(row["gross_withdrawn"]) else None
+            )
+            db.execute(stmt)
+            inserted += 1
+
+        db.commit()
+        return inserted
+    except SQLAlchemyError as e:
+        db.rollback()
+        print("Error upserting portfolio history:", str(e))
+        raise
+
+# calculate_portfolio_history(next(get_db()), base_currency="RUB")
 
 def calculate_positions(db: Session):
     """

@@ -39,10 +39,9 @@ async def upload_csv(file: UploadFile = File(...), db: Session = Depends(get_db)
                 date=row["date"],
                 type=mapped_type,
                 ticker=str(row["ticker"]).upper(),
-                currency=str("USD"),
+                currency=str(row["currency"]).upper(),
                 shares=float(row["shares"]),
                 value=float(row["value"]),
-                filled_price=float(row["filled_price"]),
             ).on_conflict_do_nothing()
 
             result = db.execute(stmt)
