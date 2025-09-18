@@ -5,6 +5,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy.dialects.postgresql import insert
 import pandas as pd
 from app.database import Transaction, get_db, TickerInfo
+from app.models.schemas import TransactionsOut
+from app.services.portfolio_service import get_transactions
 from app.services.ticker_service import fetch_ticker_info, upsert_ticker_info, upsert_missing_tickers_info
 
 router = APIRouter(prefix="/upload", tags=["upload"])
@@ -44,12 +46,10 @@ async def upload_csv(file: UploadFile = File(...), db: Session = Depends(get_db)
                 value=float(row["value"]),
             ).on_conflict_do_nothing()
 
-            result = db.execute(stmt)
-            if result.rowcount > 0:
-                inserted += 1
+            db.execute(stmt)
 
         db.commit()
-        return {"status": "ok", "rows_inserted": inserted}
+        return get_transactions(db)
     except Exception as e:
         db.rollback()
         return {"status": "error", "message": str(e)}

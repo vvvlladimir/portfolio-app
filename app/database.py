@@ -32,6 +32,8 @@ class Transaction(Base):
     shares = Column(Numeric(20, 8), nullable=False)
     value = Column(Numeric(20, 8), nullable=False)
 
+    ticker_info = relationship("TickerInfo", back_populates="transactions")
+
 class Price(Base):
     __tablename__ = "prices"
 
@@ -67,7 +69,10 @@ class Position(Base):
     date = Column(Date, primary_key=True)
     ticker = Column(String, ForeignKey("tickers.ticker"), primary_key=True)
     shares = Column(Numeric(20, 8), nullable=False)
-    market_value = Column(Numeric(20, 8), nullable=True)  # стоимость в валюте тикера
+    price = Column(Numeric(20, 8), nullable=True)
+    position_value = Column(Numeric(20, 8), nullable=True)
+    market_daily_return_pct = Column(Numeric(20, 8), nullable=True)
+    total_pnl = Column(Numeric(20, 8), nullable=True)
 
     ticker_info = relationship("TickerInfo", back_populates="positions")
 
@@ -82,6 +87,7 @@ class TickerInfo(Base):
 
     prices = relationship("Price", back_populates="ticker_info")
     positions = relationship("Position", back_populates="ticker_info")
+    transactions = relationship("Transaction", back_populates="ticker_info")
 
 def init_db():
     Base.metadata.create_all(bind=engine)

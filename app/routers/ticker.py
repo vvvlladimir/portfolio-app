@@ -21,7 +21,6 @@ async def load_prices(req: TickersRequest, db: Session = Depends(get_db)):
         return {"status": "ok", "tickers": tickers, "rows_inserted": ticker_service.upsert_prices(db, data)}
 
     except Exception as e:
-        db.rollback()
         return {"status": "error", "message": str(e)}
 
 

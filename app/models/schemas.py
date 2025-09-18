@@ -1,6 +1,51 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import List
+from datetime import date
 
 class TickersRequest(BaseModel):
     tickers: List[str]
-    
+
+class TickerOut(BaseModel):
+    ticker: str
+    currency: str
+    long_name: str | None
+    exchange: str | None
+    asset_type: str | None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PortfolioHistoryOut(BaseModel):
+    date: date
+    total_value: float | None
+    invested_value: float | None
+    gross_invested: float | None
+    gross_withdrawn: float | None
+    pnl: float | None
+    return_pct: float | None
+
+    model_config = ConfigDict(from_attributes=True)
+
+class TransactionsOut(BaseModel):
+    id: int
+    date: date
+    type: str | None
+    ticker: str | None
+    currency: str | None
+    shares: float | None
+    value: float | None
+    ticker_info: TickerOut
+
+    model_config = ConfigDict(from_attributes=True)
+
+class PositionsOut(BaseModel):
+    date: date
+    ticker: str | None
+    shares: float | None
+    price: float | None
+    position_value: float | None
+    market_daily_return_pct: float | None
+    total_pnl: float | None
+    ticker_info: TickerOut
+
+    model_config = ConfigDict(from_attributes=True)
