@@ -21,8 +21,8 @@ class PortfolioHistoryOut(BaseModel):
     invested_value: float | None
     gross_invested: float | None
     gross_withdrawn: float | None
-    pnl: float | None
-    return_pct: float | None
+    total_pnl: float | None
+    total_pnl: float | None
 
     model_config = ConfigDict(from_attributes=True)
 

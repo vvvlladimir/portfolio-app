@@ -1,6 +1,3 @@
-import sys
-print("Python executable:", sys.executable)
-
 from sqlalchemy import text
 from app.database import PortfolioHistory, Transaction, TickerInfo, Price, Position,get_db
 from app.models.schemas import PortfolioHistoryOut, TransactionsOut, PositionsOut
@@ -109,7 +106,7 @@ def add_fifo_pnl(df: pd.DataFrame,
     df["total_pnl"] = total_list
     df["total_pnl_pct"] = total_list / (df[shares_col] * df[price_col]).replace(0, pd.NA)
 
-    return df.sort_values(["date", "ticker"]).set_index(["date", "ticker"])
+    return df.sort_values(["date", "ticker"])
 
 def get_transactions(db: Session):
     try:
@@ -181,8 +178,9 @@ def get_rate(from_cur, to_cur, date, fx_rates, max_lag_days=30):
     return 1.0 / float(last_row["rate"])
 
 def calculate_portfolio_history(db: Session, base_currency: str = "USD") -> pd.DataFrame:
+    # --- 1. Позиции ---
     positions = (
-        db.query(Position.date, Position.ticker, Position.value, TickerInfo.currency)
+        db.query(Position.date, Position.ticker, Position.position_value, TickerInfo.currency)
         .join(TickerInfo, Position.ticker == TickerInfo.ticker)
         .all()
     )
@@ -190,13 +188,13 @@ def calculate_portfolio_history(db: Session, base_currency: str = "USD") -> pd.D
 
     # --- 2. Транзакции ---
     transactions = (
-        db.query(Transaction.date, Transaction.type, Transaction.shares, Transaction.value, Transaction.currency)
+        db.query(Transaction.date, Transaction.type, Transaction.value, Transaction.currency)
         .all()
     )
-    df_transactions = pd.DataFrame(transactions, columns=["date", "type", "shares", "value", "currency"])
+    df_transactions = pd.DataFrame(transactions, columns=["date", "type", "value", "currency"])
 
     if df_positions.empty and df_transactions.empty:
-        return pd.DataFrame()
+        return pd.DataFrame(columns=["date", "total_value", "invested_value", "pnl"])
 
     # --- 3. Курсы валют ---
     currencies = set(df_positions["currency"].unique()) | set(df_transactions["currency"].unique())
@@ -209,30 +207,26 @@ def calculate_portfolio_history(db: Session, base_currency: str = "USD") -> pd.D
         .all()
     )
     df_fx_rates = pd.DataFrame(fx, columns=["pair", "date", "rate"])
-
-    df_positions["date"] = pd.to_datetime(df_positions["date"])
-    df_transactions["date"] = pd.to_datetime(df_transactions["date"])
     df_fx_rates["date"] = pd.to_datetime(df_fx_rates["date"])
 
-    def convert_value(row, base_currency, fx_rates, value_row = "value"):
-        rate = get_rate(row["currency"], base_currency, row["date"], fx_rates)
-        return float(row[value_row]) * rate
+    # --- 4. Приводим даты ---
+    df_positions["date"] = pd.to_datetime(df_positions["date"])
+    df_transactions["date"] = pd.to_datetime(df_transactions["date"])
 
+    # --- 5. Универсальная функция конвертации ---
+    def convert_value(row, value_col="value"):
+        rate = get_rate(row["currency"], base_currency, row["date"], df_fx_rates)
+        return float(row[value_col]) * rate
 
-    df_positions["total_value"] = df_positions.apply(
-        lambda row: convert_value(row, base_currency, df_fx_rates, "value"),
-        axis=1
-    )
+    # --- 6. Пересчёт позиций и транзакций в base_currency ---
+    df_positions["total_value"] = df_positions.apply(convert_value, axis=1)
+    df_transactions["amount_in_base"] = df_transactions.apply(convert_value, axis=1)
 
+    # --- 7. Агрегация ---
     portfolio = (
         df_positions.groupby("date")["total_value"]
         .sum()
         .reset_index()
-    )
-
-    df_transactions["amount_in_base"] = df_transactions.apply(
-        lambda row: convert_value(row, base_currency, df_fx_rates, "value"),
-        axis=1
     )
 
     df_cashflows = (
@@ -244,14 +238,8 @@ def calculate_portfolio_history(db: Session, base_currency: str = "USD") -> pd.D
         .reset_index()
     )
 
-
-    # ---------- Объединение ----------
-    report = pd.merge(
-        portfolio,
-        df_cashflows,
-        on="date",
-        how="outer"
-    ).fillna(0)
+    # --- 8. Объединяем ---
+    report = pd.merge(portfolio, df_cashflows, on="date", how="outer").fillna(0)
     report["invested_value"] = report["gross_invested"].cumsum() - report["gross_withdrawn"].cumsum()
 
     return report
@@ -394,23 +382,21 @@ def calculate_positions(db: Session):
 def upsert_positions(db: Session) -> int:
     try:
         data = calculate_positions(db)
-
         db.query(Position).delete()
-        rows_to_insert = []
-        for _, row in data.iterrows():
-            rows_to_insert.append({
+        rows_to_insert = [
+            {
                 "date": row["date"].date(),
                 "ticker": row["ticker"],
-                "shares": float(row["shares"]) if not pd.isna(row["shares"]) else None,
-                "price": float(row["price"]) if not pd.isna(row["price"]) else None,
-                "position_value": float(row["position_value"]) if not pd.isna(row["position_value"]) else None,
-                "market_daily_return_pct": float(row["market_daily_return_pct"]) if not pd.isna(row["market_daily_return_pct"]) else None,
-                "total_pnl": float(row["total_pnl"]) if not pd.isna(row["total_pnl"]) else None,
-            })
+                "shares": row["shares"],
+                "price": row["price"],
+                "position_value": row["position_value"],
+                "market_daily_return_pct": row["market_daily_return_pct"],
+                "total_pnl": row["total_pnl"],
+            }
+            for _, row in data.iterrows()
+        ]
 
-        # bulk insert
-        stmt = insert(Position)
-        db.execute(stmt, rows_to_insert)
+        db.bulk_insert_mappings(Position, rows_to_insert)
         db.commit()
 
         rows = db.query(Position).all()
@@ -419,5 +405,3 @@ def upsert_positions(db: Session) -> int:
         db.rollback()
         print("Error upserting portfolio history:", str(e))
         raise
-
-print(upsert_positions(next(get_db())))

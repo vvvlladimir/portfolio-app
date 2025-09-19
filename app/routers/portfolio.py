@@ -18,10 +18,10 @@ async def get_portfolio_history(db: Session = Depends(get_db)):
     """
     try:
         upsert_positions(db)
-        # data = upsert_portfolio_history(db)
+        data = upsert_portfolio_history(db)
         return {
             "status": "ok",
-            # "data": data
+            "data": data
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}
@@ -51,7 +51,7 @@ async def get_transactions_history(db: Session = Depends(get_db)):
 @router.get("/last-positions", response_model=list[PositionsOut])
 async def get_transactions_history(db: Session = Depends(get_db)):
     try:
-        last_date = db.query(func.max(Position.date)).scalar()
+        last_date = db.query(func.max(Position.date))
         data = db.query(Position).filter(Position.date == last_date).all()
 
         if not data:

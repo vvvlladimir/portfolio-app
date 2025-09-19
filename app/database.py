@@ -56,8 +56,8 @@ class PortfolioHistory(Base):
     gross_invested = Column(Numeric(20, 8), nullable=True)
     gross_withdrawn = Column(Numeric(20, 8), nullable=True)
 
-    pnl = Column(Numeric(20, 8), Computed("total_value - invested_value"),)
-    return_pct = Column(Numeric(20, 8), Computed(
+    total_pnl = Column(Numeric(20, 8), Computed("total_value - invested_value"),)
+    total_pnl_pct = Column(Numeric(20, 8), Computed(
         "CASE WHEN invested_value <> 0 "
         "THEN ((total_value - invested_value) / invested_value) * 100 "
         "ELSE 0 END"
