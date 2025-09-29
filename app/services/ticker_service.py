@@ -1,12 +1,13 @@
 from typing import List
 from itertools import combinations
+from sqlalchemy import func
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from sqlalchemy.dialects.postgresql import insert
 import pandas as pd
 import yfinance as yf
 import time
-from app.database import Price, TickerInfo
+from app.database import Price, TickerInfo, Transaction
 
 
 def fetch_prices(tickers: List[str], period="5y", interval="1d") -> pd.DataFrame:
@@ -29,19 +30,30 @@ def upsert_prices(db: Session, data: pd.DataFrame) -> int:
     """Save DataFrame with prices to database using upsert by ticker+date."""
     try:
         inserted = 0
-        upsert_missing_tickers_info(db, data["Ticker"].unique().tolist())
+
+        last_dates = (
+            db.query(Price.ticker, func.max(Price.date))
+            .group_by(Price.ticker)
+            .all()
+        )
+        last_date_map = {t: d for t, d in last_dates}
 
         for _, row in data.iterrows():
+            ticker = row["Ticker"].upper()
+            date_value = row["Date"].date()
+
+            if ticker in last_date_map and date_value <= last_date_map[ticker]:
+                continue
+
             stmt = insert(Price).values(
-                ticker=row["Ticker"].upper(),
-                date=row["Date"].date(),
+                ticker=ticker,
+                date=date_value,
                 open=float(row["Open"]) if not pd.isna(row["Open"]) else None,
                 high=float(row["High"]) if not pd.isna(row["High"]) else None,
                 low=float(row["Low"]) if not pd.isna(row["Low"]) else None,
                 close=float(row["Close"]) if not pd.isna(row["Close"]) else None,
                 volume=float(row["Volume"]) if not pd.isna(row["Volume"]) else None
-            )
-            stmt = stmt.on_conflict_do_nothing(
+            ).on_conflict_do_nothing(
                 index_elements=["ticker", "date"]
             )
 
@@ -55,6 +67,35 @@ def upsert_prices(db: Session, data: pd.DataFrame) -> int:
         db.rollback()
         print("Error upserting prices:", str(e))
         raise
+
+def upsert_all_prices(db: Session) -> int:
+    try:
+        tickers_db = db.query(Transaction.ticker).distinct().all()
+        tickers = [t[0].upper() for t in tickers_db]
+
+        if not tickers:
+            return {"status": "error", "message": "No tickers in transactions table"}
+
+        tx_currencies = set(c[0] for c in db.query(Transaction.currency).distinct())
+        ticker_currencies = set(c[0] for c in db.query(TickerInfo.currency).distinct())
+        currencies = sorted(tx_currencies | ticker_currencies)
+
+        price_data = fetch_prices(tickers)
+        rows_inserted_tickers = upsert_prices(db, price_data)
+
+        fx_data = fetch_fx_rates(currencies)
+        rows_inserted_fx = upsert_prices(db, fx_data)
+
+        return {
+            "tickers": tickers,
+            "currencies": currencies,
+            "rows_inserted": rows_inserted_tickers + rows_inserted_fx
+        }
+    except SQLAlchemyError as e:
+        db.rollback()
+        print("Error upserting prices:", str(e))
+        raise
+
 
 
 def fetch_ticker_info(ticker: str, sleep: float = 0.5) -> dict:

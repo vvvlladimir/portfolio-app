@@ -115,7 +115,6 @@ def get_transactions(db: Session):
                     .all())
         return [TransactionsOut.model_validate(row) for row in rows]
     except Exception as e:
-        db.rollback()
         return {"status": "error", "message": str(e)}
 
 def expand_with_full_calendar(df, value_cols, start=None, end=None):
