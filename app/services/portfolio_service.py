@@ -1,9 +1,6 @@
-from sqlalchemy import text
-from app.database import PortfolioHistory, Transaction, TickerInfo, Price, Position,get_db
-from app.models.schemas import PortfolioHistoryOut, TransactionsOut, PositionsOut
+from app.database.database import Transaction, TickerInfo, Price, Position
+from app.models.schemas import TransactionsOut
 from app.models.transactions import TransactionType
-from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, joinedload
 import pandas as pd
 from collections import deque
@@ -43,8 +40,7 @@ def add_fifo_pnl(df: pd.DataFrame,
                  date_col: str = "date",
                  ticker_col: str = "ticker",
                  shares_col: str = "shares",
-                 price_col: str = "price",
-                 close_col: str = "close") -> pd.DataFrame:
+                 price_col: str = "price") -> pd.DataFrame:
     """
     Добавляет FIFO PnL (realized, unrealized, total) в DataFrame.
 
@@ -75,7 +71,6 @@ def add_fifo_pnl(df: pd.DataFrame,
         date = row[date_col]
         ticker = row[ticker_col]
         shares = row[shares_col]
-        close = row[close_col]
         price = row[price_col]
 
         if ticker not in traders:
@@ -94,7 +89,7 @@ def add_fifo_pnl(df: pd.DataFrame,
             trader.sell(-delta, price)
 
         realized = trader.realized_pnl
-        unrealized = trader.unrealized_pnl(close)
+        unrealized = trader.unrealized_pnl(price)
         total = realized + unrealized
 
         realized_list.append(realized)
@@ -136,7 +131,7 @@ def expand_with_full_calendar(df, value_cols, start=None, end=None):
     )
     return df_expanded.reset_index()
 
-def get_rate(from_cur, to_cur, date, fx_rates, max_lag_days=30):
+def get_rate(from_cur, to_cur, date, fx_rates):
     """
     Возвращает курс from_cur -> to_cur на дату или ближайший прошлый.
     Приоритет: прямая пара, затем обратная.
@@ -146,34 +141,21 @@ def get_rate(from_cur, to_cur, date, fx_rates, max_lag_days=30):
     if from_cur == to_cur:
         return 1.0
 
-    # строим пары
     pair_direct = f"{from_cur}{to_cur}=X"
     pair_inverse = f"{to_cur}{from_cur}=X"
 
-    # выбираем обе пары сразу
     candidates = fx_rates[
         (fx_rates["pair"].isin([pair_direct, pair_inverse]))
         & (fx_rates["date"] <= date)
         ].sort_values("date")
 
     if candidates.empty:
-        raise ValueError(f"Нет курса для {from_cur}->{to_cur} на {date}")
-
-    # берём последнюю доступную запись
+        raise ValueError(f"No FX-rate {from_cur}->{to_cur} at {date}")
     last_row = candidates.iloc[-1]
 
-    # проверяем давность курса
-    if (date - last_row["date"]).days > max_lag_days:
-        raise ValueError(
-            f"Нет свежего курса для {from_cur}->{to_cur} на {date}, "
-            f"последний: {last_row['date'].date()}"
-        )
-
-    # если это прямая пара → используем rate
     if last_row["pair"] == pair_direct:
         return float(last_row["rate"])
 
-    # иначе обратная → инверсия
     return 1.0 / float(last_row["rate"])
 
 def calculate_portfolio_history(db: Session, base_currency: str = "USD") -> pd.DataFrame:
@@ -242,36 +224,6 @@ def calculate_portfolio_history(db: Session, base_currency: str = "USD") -> pd.D
     report["invested_value"] = report["gross_invested"].cumsum() - report["gross_withdrawn"].cumsum()
 
     return report
-
-def upsert_portfolio_history(db: Session, base_currency: str = "USD") -> int:
-    """
-    Пересчитывает и сохраняет историю портфеля в базу.
-    """
-    try:
-        inserted = 0
-        data = calculate_portfolio_history(db, base_currency)
-
-        db.query(PortfolioHistory).delete()
-        for _, row in data.iterrows():
-            stmt = insert(PortfolioHistory).values(
-                date=row["date"].date(),
-                total_value=float(row["total_value"]) if not pd.isna(row["total_value"]) else None,
-                invested_value=float(row["invested_value"]) if not pd.isna(row["invested_value"]) else None,
-                gross_invested=float(row["gross_invested"]) if not pd.isna(row["gross_invested"]) else None,
-                gross_withdrawn=float(row["gross_withdrawn"]) if not pd.isna(row["gross_withdrawn"]) else None
-            )
-            db.execute(stmt)
-            inserted += 1
-        db.commit()
-
-        # достаём все новые строки
-        rows = db.query(PortfolioHistory).all()
-
-        return [PortfolioHistoryOut.model_validate(row) for row in rows]
-    except SQLAlchemyError as e:
-        db.rollback()
-        print("Error upserting portfolio history:", str(e))
-        raise
 
 # calculate_portfolio_history(next(get_db()), base_currency="RUB")
 
@@ -378,29 +330,3 @@ def calculate_positions(db: Session):
 
     return add_fifo_pnl(df_positions)
 
-def upsert_positions(db: Session) -> int:
-    try:
-        data = calculate_positions(db)
-        db.query(Position).delete()
-        rows_to_insert = [
-            {
-                "date": row["date"].date(),
-                "ticker": row["ticker"],
-                "shares": row["shares"],
-                "price": row["price"],
-                "position_value": row["position_value"],
-                "market_daily_return_pct": row["market_daily_return_pct"],
-                "total_pnl": row["total_pnl"],
-            }
-            for _, row in data.iterrows()
-        ]
-
-        db.bulk_insert_mappings(Position, rows_to_insert)
-        db.commit()
-
-        rows = db.query(Position).all()
-        return [PositionsOut.model_validate(row) for row in rows]
-    except SQLAlchemyError as e:
-        db.rollback()
-        print("Error upserting portfolio history:", str(e))
-        raise

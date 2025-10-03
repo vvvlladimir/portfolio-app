@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from app.database import Transaction, get_db, TickerInfo
+from app.database.database import get_db
+from app.database.upsert_data import upsert_prices, upsert_all_prices, upsert_ticker_info
 from app.models.schemas import TickersRequest
-import app.services.ticker_service as ticker_service
+from app.services.ticker_service import fetch_prices, fetch_ticker_info
 
 router = APIRouter(prefix="/ticker", tags=["ticker"])
 
@@ -17,8 +18,8 @@ async def load_prices(req: TickersRequest, db: Session = Depends(get_db)):
         if not tickers:
             raise ValueError("No valid tickers provided")
 
-        data = ticker_service.fetch_prices(tickers)
-        return {"status": "ok", "tickers": tickers, "rows_inserted": ticker_service.upsert_prices(db, data)}
+        data = fetch_prices(tickers)
+        return {"status": "ok", "tickers": tickers, "rows_inserted": upsert_prices(db, data)}
 
     except Exception as e:
         return {"status": "error", "message": str(e)}
@@ -32,7 +33,7 @@ async def load_all_prices(db: Session = Depends(get_db)):
     try:
         return {
             "status": "ok",
-            **ticker_service.upsert_all_prices(db)
+            **upsert_all_prices(db)
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}
@@ -48,8 +49,8 @@ async def load_tickers_info(req: TickersRequest, db: Session = Depends(get_db)):
             raise HTTPException(status_code=400, detail="No valid tickers provided")
 
         for ticker in tickers:
-            data = ticker_service.fetch_ticker_info(ticker)
-            ticker_service.upsert_ticker_info(db, data)
+            data = fetch_ticker_info(ticker)
+            upsert_ticker_info(db, data)
 
         return {"status": "ok", "tickers": tickers}
 

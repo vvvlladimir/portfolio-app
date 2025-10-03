@@ -1,13 +1,8 @@
 from typing import List
 from itertools import combinations
-from sqlalchemy import func
-from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.orm import Session
-from sqlalchemy.dialects.postgresql import insert
 import pandas as pd
 import yfinance as yf
 import time
-from app.database import Price, TickerInfo, Transaction
 
 
 def fetch_prices(tickers: List[str], period="5y", interval="1d") -> pd.DataFrame:
@@ -17,84 +12,13 @@ def fetch_prices(tickers: List[str], period="5y", interval="1d") -> pd.DataFrame
         period=period,
         interval=interval,
         progress=False,
+        prepost=True,
     )
-
     if data.empty:
         raise ValueError("No data found")
 
     data = data.stack().reset_index()
     return data
-
-
-def upsert_prices(db: Session, data: pd.DataFrame) -> int:
-    """Save DataFrame with prices to database using upsert by ticker+date."""
-    try:
-        inserted = 0
-
-        last_dates = (
-            db.query(Price.ticker, func.max(Price.date))
-            .group_by(Price.ticker)
-            .all()
-        )
-        last_date_map = {t: d for t, d in last_dates}
-
-        for _, row in data.iterrows():
-            ticker = row["Ticker"].upper()
-            date_value = row["Date"].date()
-
-            if ticker in last_date_map and date_value <= last_date_map[ticker]:
-                continue
-
-            stmt = insert(Price).values(
-                ticker=ticker,
-                date=date_value,
-                open=float(row["Open"]) if not pd.isna(row["Open"]) else None,
-                high=float(row["High"]) if not pd.isna(row["High"]) else None,
-                low=float(row["Low"]) if not pd.isna(row["Low"]) else None,
-                close=float(row["Close"]) if not pd.isna(row["Close"]) else None,
-                volume=float(row["Volume"]) if not pd.isna(row["Volume"]) else None
-            ).on_conflict_do_nothing(
-                index_elements=["ticker", "date"]
-            )
-
-            result = db.execute(stmt)
-            if result.rowcount > 0:
-                inserted += 1
-
-        db.commit()
-        return inserted
-    except SQLAlchemyError as e:
-        db.rollback()
-        print("Error upserting prices:", str(e))
-        raise
-
-def upsert_all_prices(db: Session) -> int:
-    try:
-        tickers_db = db.query(Transaction.ticker).distinct().all()
-        tickers = [t[0].upper() for t in tickers_db]
-
-        if not tickers:
-            return {"status": "error", "message": "No tickers in transactions table"}
-
-        tx_currencies = set(c[0] for c in db.query(Transaction.currency).distinct())
-        ticker_currencies = set(c[0] for c in db.query(TickerInfo.currency).distinct())
-        currencies = sorted(tx_currencies | ticker_currencies)
-
-        price_data = fetch_prices(tickers)
-        rows_inserted_tickers = upsert_prices(db, price_data)
-
-        fx_data = fetch_fx_rates(currencies)
-        rows_inserted_fx = upsert_prices(db, fx_data)
-
-        return {
-            "tickers": tickers,
-            "currencies": currencies,
-            "rows_inserted": rows_inserted_tickers + rows_inserted_fx
-        }
-    except SQLAlchemyError as e:
-        db.rollback()
-        print("Error upserting prices:", str(e))
-        raise
 
 
 
@@ -128,47 +52,6 @@ def fetch_ticker_info(ticker: str, sleep: float = 0.5) -> dict:
         }
 
 
-def upsert_ticker_info(db: Session, data: dict) -> None:
-    """Insert or update ticker information in database."""
-    try:
-        stmt = insert(TickerInfo).values(**data)
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["ticker"],
-            set_={
-                "currency": stmt.excluded.currency,
-                "long_name": stmt.excluded.long_name,
-                "exchange": stmt.excluded.exchange,
-                "asset_type": stmt.excluded.asset_type,
-            }
-        )
-
-        db.execute(stmt)
-        db.commit()
-    except SQLAlchemyError as e:
-        db.rollback()
-        print("Error upserting ticker info for", data.get("ticker"), ":", str(e))
-        raise
-
-def upsert_missing_tickers_info(db: Session, tickers: List[str]) -> int:
-    """Fetch and upsert ticker info for tickers missing in the database."""
-    valid_tickers = [str(t).upper() for t in tickers if pd.notna(t) and str(t).strip()]
-    tickers_set = set(valid_tickers)
-
-    if not tickers_set:
-        return 0
-
-    existing = set(
-        t[0] for t in db.query(TickerInfo.ticker)
-        .filter(TickerInfo.ticker.in_(tickers_set))
-        .all()
-    )
-
-    to_fetch = tickers_set - existing
-    for ticker in to_fetch:
-        data = fetch_ticker_info(ticker)
-        upsert_ticker_info(db, data)
-
-    return len(to_fetch)
 
 def fetch_fx_rates(currencies: List[str], period="5y", interval="1d") -> pd.DataFrame:
     """Fetch all available unique FX rates for given currencies"""
@@ -190,3 +73,71 @@ def fetch_fx_rates(currencies: List[str], period="5y", interval="1d") -> pd.Data
 
     data = data.stack().reset_index()
     return data
+
+
+"""
+CREATE MATERIALIZED VIEW positions_mv AS
+WITH tx_daily AS (
+    SELECT
+        t.ticker,
+        t.date,
+        SUM(
+            CASE
+                WHEN t.type = 'BUY'  THEN t.shares
+                WHEN t.type = 'SELL' THEN -t.shares
+                ELSE 0
+            END
+        ) AS signed_shares
+    FROM transactions t
+    GROUP BY t.ticker, t.date
+),
+calendar AS (
+    SELECT gs::date AS date
+    FROM generate_series(
+        (SELECT MIN(date) FROM transactions),
+        (SELECT MAX(date) FROM prices),
+        interval '1 day'
+    ) gs
+),
+grid AS (
+    SELECT c.date, tk.ticker
+    FROM calendar c
+    CROSS JOIN (SELECT DISTINCT ticker FROM transactions) tk
+),
+pos AS (
+    SELECT
+        g.date,
+        g.ticker,
+        SUM(COALESCE(tx.signed_shares, 0))
+            OVER (PARTITION BY g.ticker ORDER BY g.date) AS cum_shares
+    FROM grid g
+    LEFT JOIN tx_daily tx
+        ON tx.ticker = g.ticker
+       AND tx.date = g.date
+),
+px_ff AS (
+    SELECT
+        g.date,
+        g.ticker,
+        (
+            SELECT p.close
+            FROM prices p
+            WHERE p.ticker = g.ticker
+              AND p.date <= g.date
+            ORDER BY p.date DESC
+            LIMIT 1
+        ) AS close_price_native
+    FROM grid g
+)
+SELECT
+    p.date,
+    p.ticker,
+    ti.currency AS ticker_currency,
+    p.cum_shares,
+    px.close_price_native
+FROM pos p
+JOIN px_ff px
+  ON px.date = p.date AND px.ticker = p.ticker
+JOIN tickers ti
+  ON ti.ticker = p.ticker;
+"""

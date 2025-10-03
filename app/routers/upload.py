@@ -1,13 +1,12 @@
 import dateparser
 import pandas as pd
-from app.database import Transaction, get_db
-from app.routers.portfolio import get_portfolio_history
-from app.routers.ticker import load_all_prices
-from app.services.portfolio_service import get_transactions, upsert_positions, upsert_portfolio_history
+from app.database.database import Transaction, get_db
+from app.database.upsert_data import upsert_missing_tickers_info, upsert_all_prices, upsert_positions, \
+    upsert_portfolio_history
+from app.services.portfolio_service import get_transactions
 from fastapi import APIRouter, UploadFile, File, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy.dialects.postgresql import insert
-from app.services.ticker_service import upsert_missing_tickers_info, upsert_all_prices
 
 router = APIRouter(prefix="/upload", tags=["upload"])
 
