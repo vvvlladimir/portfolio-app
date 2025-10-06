@@ -45,7 +45,7 @@ async def upload_csv(
 
         upsert_all_prices(db)
         upsert_positions(db)
-        upsert_portfolio_history(db)
+        # upsert_portfolio_history(db)
         return get_transactions(db)
 
     except Exception as e:

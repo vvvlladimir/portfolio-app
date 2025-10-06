@@ -4,7 +4,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from sqlalchemy.dialects.postgresql import insert
 import pandas as pd
-from app.database.database import Price, TickerInfo, Transaction, PortfolioHistory, Position
+from app.database.database import Price, TickerInfo, Transaction, PortfolioHistory, Position, get_db
 from app.models.schemas import PortfolioHistoryOut, PositionsOut
 from app.services.portfolio_service import calculate_portfolio_history, calculate_positions
 from app.services.ticker_service import fetch_prices, fetch_fx_rates, fetch_ticker_info
@@ -67,7 +67,8 @@ def upsert_all_prices(db: Session) -> int:
         price_data = fetch_prices(tickers)
         rows_inserted_tickers = upsert_prices(db, price_data)
 
-        fx_data = fetch_fx_rates(currencies)
+        fx_data, pairs = fetch_fx_rates(currencies)
+        upsert_missing_tickers_info(db, pairs)
         rows_inserted_fx = upsert_prices(db, fx_data)
 
         return {
@@ -160,9 +161,9 @@ def upsert_positions(db: Session) -> int:
                 "date": row["date"].date(),
                 "ticker": row["ticker"],
                 "shares": row["shares"],
-                "price": row["price"],
-                "position_value": row["position_value"],
-                "market_daily_return_pct": row["market_daily_return_pct"],
+                "close": row["close"],
+                "gross_invested": row["gross_invested"],
+                "gross_withdraw": row["gross_withdraw"],
                 "total_pnl": row["total_pnl"],
             }
             for _, row in data.iterrows()

@@ -4,7 +4,6 @@ import pandas as pd
 import yfinance as yf
 import time
 
-
 def fetch_prices(tickers: List[str], period="5y", interval="1d") -> pd.DataFrame:
     """Fetch historical prices for tickers via Yahoo Finance."""
     data = yf.download(
@@ -72,7 +71,7 @@ def fetch_fx_rates(currencies: List[str], period="5y", interval="1d") -> pd.Data
         raise ValueError("No FX data found")
 
     data = data.stack().reset_index()
-    return data
+    return data, pairs
 
 
 """

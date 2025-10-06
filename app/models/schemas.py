@@ -42,9 +42,9 @@ class PositionsOut(BaseModel):
     date: date
     ticker: str | None
     shares: float | None
-    price: float | None
-    position_value: float | None
-    market_daily_return_pct: float | None
+    close: float | None
+    gross_invested: float | None
+    gross_withdraw: float | None
     total_pnl: float | None
     ticker_info: TickerOut
 

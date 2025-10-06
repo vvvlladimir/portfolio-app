@@ -1,7 +1,6 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from fastapi import APIRouter, Depends, HTTPException
-from starlette import status
+
 
 def refresh_materialized_view(db: Session, view_name: str, concurrently: bool = True):
     """

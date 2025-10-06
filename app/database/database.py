@@ -25,12 +25,13 @@ class Transaction(Base):
     __tablename__ = "transactions"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    date = Column(Date, nullable=False)
+    date = Column(Date, primary_key=True, nullable=False)
     type = Column(String, nullable=False)
     ticker = Column(String, ForeignKey("tickers.ticker"), nullable=False)
     currency = Column(String, nullable=False)
     shares = Column(Numeric(20, 8), nullable=False)
     value = Column(Numeric(20, 8), nullable=False)
+    # TODO: add broker
 
     ticker_info = relationship("TickerInfo", back_populates="transactions")
 
@@ -69,9 +70,9 @@ class Position(Base):
     date = Column(Date, primary_key=True)
     ticker = Column(String, ForeignKey("tickers.ticker"), primary_key=True)
     shares = Column(Numeric(20, 8), nullable=False)
-    price = Column(Numeric(20, 8), nullable=True)
-    position_value = Column(Numeric(20, 8), nullable=True)
-    market_daily_return_pct = Column(Numeric(20, 8), nullable=True)
+    close = Column(Numeric(20, 8), nullable=True)
+    gross_invested = Column(Numeric(20, 8), nullable=True)
+    gross_withdraw = Column(Numeric(20, 8), nullable=True)
     total_pnl = Column(Numeric(20, 8), nullable=True)
 
     ticker_info = relationship("TickerInfo", back_populates="positions")
@@ -80,14 +81,15 @@ class TickerInfo(Base):
     __tablename__ = "tickers"
 
     ticker = Column(String, primary_key=True, unique=True, nullable=False)
-    currency = Column(String, nullable=False)  # USD, EUR, HKD
-    long_name = Column(String, nullable=True)   # Apple Inc.
-    exchange = Column(String, nullable=True)   # NASDAQ, XETRA, HKEX
-    asset_type = Column(String, nullable=True)  # STOCK, ETF, CRYPTO, BOND
+    currency = Column(String, nullable=False)
+    long_name = Column(String, nullable=True)
+    exchange = Column(String, nullable=True)
+    asset_type = Column(String, nullable=True)
 
     prices = relationship("Price", back_populates="ticker_info")
     positions = relationship("Position", back_populates="ticker_info")
     transactions = relationship("Transaction", back_populates="ticker_info")
+
 
 def init_db():
     Base.metadata.create_all(bind=engine)
