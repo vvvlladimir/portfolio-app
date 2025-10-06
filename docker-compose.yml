@@ -12,13 +12,13 @@ services:
     volumes:
       - pgdata:/home/postgres/pgdata/data
 
-#  migrations:
-#      build: .
-#      depends_on:
-#        - db
-#      env_file:
-#        - .env
-#      command: alembic upgrade head
+  migrations:
+      build: .
+      depends_on:
+        - db
+      env_file:
+        - .env
+      command: alembic upgrade head
 
 #  backend:
 #    build: .
