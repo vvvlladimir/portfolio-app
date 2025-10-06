@@ -1,6 +1,6 @@
 FROM python:3.12-slim
 
-WORKDIR /
+WORKDIR /app
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
@@ -27,4 +27,4 @@ echo "Database started"\n\
 exec "$@"' > /wait-for-db.sh && chmod +x /wait-for-db.sh
 
 EXPOSE 8000
-CMD ["/wait-for-db.sh", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["/wait-for-db.sh", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
