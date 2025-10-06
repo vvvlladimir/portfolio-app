@@ -11,24 +11,32 @@ services:
       - "5432:5432"
     volumes:
       - pgdata:/home/postgres/pgdata/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   migrations:
-      build: .
-      depends_on:
-        - db
-      env_file:
-        - .env
-      command: alembic upgrade head
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    command: ["/wait-for-db.sh", "alembic", "upgrade", "head"]
 
-#  backend:
-#    build: .
-#    depends_on:
-#      - db
-#    env_file:
-#      - .env
-#    ports:
-#      - "8000:8000"
-#    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+  backend:
+    build: .
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    command: ["/wait-for-db.sh", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
 
 volumes:
   pgdata:

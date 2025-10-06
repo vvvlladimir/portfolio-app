@@ -7,7 +7,7 @@ db_user = config("DB_USER", default="postgres")
 db_password = config("DB_PASSWORD")
 db_name = config("DB_NAME", default="postgres")
 
-DATABASE_URL = f"postgresql://{db_user}:{db_password}@localhost:5432/{db_name}"
+DATABASE_URL = f"postgresql://{db_user}:{db_password}@db:5432/{db_name}"
 engine = create_engine(DATABASE_URL, echo=True)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

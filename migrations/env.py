@@ -63,7 +63,7 @@ def run_migrations_online() -> None:
 
     """
 
-    database_url = f"postgresql://{db_user}:{db_password}@localhost:5432/{db_name}"
+    database_url = f"postgresql://{db_user}:{db_password}@db:5432/{db_name}"
     config.set_main_option("sqlalchemy.url", database_url)
 
     connectable = engine_from_config(
