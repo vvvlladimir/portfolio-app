@@ -6,8 +6,9 @@ from decouple import config
 db_user = config("DB_USER", default="postgres")
 db_password = config("DB_PASSWORD")
 db_name = config("DB_NAME", default="postgres")
+db_host = config("DB_HOST", default="localhost")
 
-DATABASE_URL = f"postgresql://{db_user}:{db_password}@db:5432/{db_name}"
+DATABASE_URL = f"postgresql://{db_user}:{db_password}@{db_host}:5432/{db_name}"
 engine = create_engine(DATABASE_URL, echo=True)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
@@ -72,7 +73,7 @@ class Position(Base):
     shares = Column(Numeric(20, 8), nullable=False)
     close = Column(Numeric(20, 8), nullable=True)
     gross_invested = Column(Numeric(20, 8), nullable=True)
-    gross_withdraw = Column(Numeric(20, 8), nullable=True)
+    gross_withdrawn = Column(Numeric(20, 8), nullable=True)
     total_pnl = Column(Numeric(20, 8), nullable=True)
 
     ticker_info = relationship("TickerInfo", back_populates="positions")

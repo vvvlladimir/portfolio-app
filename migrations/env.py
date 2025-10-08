@@ -9,6 +9,7 @@ from decouple import config
 db_user = config("DB_USER", default="postgres")
 db_password = config("DB_PASSWORD")
 db_name = config("DB_NAME", default="postgres")
+db_host = config("DB_HOST", default="localhost")
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -63,7 +64,7 @@ def run_migrations_online() -> None:
 
     """
 
-    database_url = f"postgresql://{db_user}:{db_password}@db:5432/{db_name}"
+    database_url = f"postgresql://{db_user}:{db_password}@{db_host}:5432/{db_name}"
     config.set_main_option("sqlalchemy.url", database_url)
 
     connectable = engine_from_config(

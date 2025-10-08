@@ -22,7 +22,10 @@ async def get_portfolio_history(db: Session = Depends(get_db)):
             "data": data
         }
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Unexpected error: {str(e)}"
+        )
 
 
 @router.get("/transactions", response_model=list[TransactionsOut])

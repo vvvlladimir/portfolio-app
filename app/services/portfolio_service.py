@@ -3,8 +3,7 @@ from app.models.schemas import TransactionsOut
 from app.models.transactions import TransactionType
 from sqlalchemy.orm import Session, joinedload
 import pandas as pd
-
-
+from sqlalchemy import cast, Float
 
 def get_transactions(db: Session):
     try:
@@ -39,62 +38,109 @@ def get_rate(from_cur, to_cur, date, fx_rates):
 
 def calculate_portfolio_history(db: Session, base_currency: str = "USD") -> pd.DataFrame:
     positions = (
-        db.query(Position.date, Position.ticker, Position.position_value, TickerInfo.currency)
+        db.query(
+            Position.date,
+            Position.ticker,
+            cast(Position.shares, Float),
+            cast(Position.close, Float),
+            cast(Position.gross_invested, Float),
+            cast(Position.gross_withdrawn, Float),
+            TickerInfo.currency
+        )
         .join(TickerInfo, Position.ticker == TickerInfo.ticker)
         .all()
     )
-    df_positions = pd.DataFrame(positions, columns=["date", "ticker", "value", "currency"])
 
-    transactions = (
-        db.query(Transaction.date, Transaction.type, Transaction.value, Transaction.currency)
+    df_positions = pd.DataFrame(positions, columns=["date", "ticker", "shares", "close", "gross_invested", "gross_withdrawn", "currency"])
+    df_positions['date'] = pd.to_datetime(df_positions['date'])
+
+    prices = (
+        db.query(
+            Price.date,
+            Price.ticker,
+            cast(Price.close, Float),
+        )
         .all()
     )
-    df_transactions = pd.DataFrame(transactions, columns=["date", "type", "value", "currency"])
 
-    if df_positions.empty and df_transactions.empty:
-        return pd.DataFrame(columns=["date", "total_value", "invested_value", "pnl"])
+    df_prices = pd.DataFrame(prices, columns=["date", "ticker", "close"])
+    df_prices['date'] = pd.to_datetime(df_prices['date'])
 
-    currencies = set(df_positions["currency"].unique()) | set(df_transactions["currency"].unique())
+    currencies = set(df_positions["currency"].unique())
     currencies.discard(base_currency)
-
     fx_pairs = [f"{a}{base_currency}=X" for a in currencies] + [f"{base_currency}{a}=X" for a in currencies]
-    fx = (
-        db.query(Price.ticker, Price.date, Price.close)
+    df_fx = (
+        db.query(
+            Price.ticker,
+            Price.date,
+            Price.close)
         .filter(Price.ticker.in_(fx_pairs))
+        .filter(Price.date >= df_positions['date'].min())
         .all()
     )
-    df_fx_rates = pd.DataFrame(fx, columns=["pair", "date", "rate"])
-    df_fx_rates["date"] = pd.to_datetime(df_fx_rates["date"])
 
-    df_positions["date"] = pd.to_datetime(df_positions["date"])
-    df_transactions["date"] = pd.to_datetime(df_transactions["date"])
+    df_fx = pd.DataFrame(df_fx, columns=["fx_ticker", "date", "rate"])
+    df_fx["date"] = pd.to_datetime(df_fx["date"])
 
-    def convert_value(row, value_col="value"):
-        rate = get_rate(row["currency"], base_currency, row["date"], df_fx_rates)
-        return float(row[value_col]) * rate
+    all_dates = pd.date_range(df_positions['date'].min(), df_prices['date'].max(), freq='D')
 
-    df_positions["total_value"] = df_positions.apply(convert_value, axis=1)
-    df_transactions["amount_in_base"] = df_transactions.apply(convert_value, axis=1)
-
-    portfolio = (
-        df_positions.groupby("date")["total_value"]
-        .sum()
+    df_portfolio = (
+        df_positions
+        .set_index('date')
+        .groupby('ticker')[['shares','currency','gross_invested','gross_withdrawn']]
+        .apply(lambda s: s.reindex(all_dates))
         .reset_index()
+        .rename(columns={'level_1': 'date'})
+    )
+    currencies = set(df_fx["fx_ticker"].unique())
+
+    def get_fx_ticker(curr):
+        if curr == base_currency:
+            return base_currency
+
+        direct = f"{curr}{base_currency}=X"
+        if direct in currencies:
+            return direct
+
+        inverse = f"{base_currency}{curr}=X"
+        if inverse in currencies:
+            return inverse
+
+    unique_currencies = df_portfolio["currency"].dropna().unique()
+    currency_mapping = {curr: get_fx_ticker(curr) for curr in unique_currencies}
+
+    df_portfolio['fx_ticker'] = df_portfolio['currency'].map(currency_mapping)
+
+    # first_buy = df_positions.groupby('ticker')['date'].min().rename('first_buy')
+    # df_portfolio = df_portfolio.merge(first_buy, on='ticker', how='left')
+    # df_portfolio = df_portfolio[df_portfolio['date'] >= df_portfolio['first_buy']].drop(columns='first_buy')
+    #
+    df_portfolio = (
+        df_portfolio.drop_duplicates()
+        .merge(df_prices[['date','ticker','close']], on=['date','ticker'], how='left')
+        .sort_values(['ticker','date'])
     )
 
-    df_cashflows = (
-        df_transactions.groupby("date")
-        .apply(lambda df: pd.Series({
-            "gross_invested": df.loc[df["type"].isin(TransactionType.inflows()), "amount_in_base"].sum(),
-            "gross_withdrawn": df.loc[df["type"].isin(TransactionType.outflows()), "amount_in_base"].sum()
-        }))
-        .reset_index()
+    df_portfolio[['shares','currency','close', 'fx_ticker']] = (
+        df_portfolio.groupby('ticker')[['shares','currency','close', 'fx_ticker']].ffill()
+    )
+    df_portfolio = df_portfolio.merge(
+        df_fx, on=["date", "fx_ticker"], how="left"
     )
 
-    report = pd.merge(portfolio, df_cashflows, on="date", how="outer").fillna(0)
-    report["invested_value"] = report["gross_invested"].cumsum() - report["gross_withdrawn"].cumsum()
-
-    return report
+    df_portfolio["rate"] = df_portfolio.groupby('ticker')["rate"].ffill().fillna(1.0).astype(float)
+    df_portfolio['value'] = df_portfolio['close'] * df_portfolio['shares'] * df_portfolio['rate']
+    df_portfolio['gross_invested'] = df_portfolio['gross_invested'] * df_portfolio['rate']
+    df_portfolio['gross_withdrawn'] = df_portfolio['gross_withdrawn'] * df_portfolio['rate']
+    df_portfolio = (
+        df_portfolio.groupby('date', as_index=True)[['value', 'gross_invested','gross_withdrawn']].sum()
+        .rename(columns={'value':'total_value'})
+    )
+    df_portfolio['invested_value'] = df_portfolio['gross_invested'].cumsum() - df_portfolio['gross_withdrawn'].cumsum()
+    df_portfolio['total_return'] = df_portfolio['total_value'] - df_portfolio['invested_value']
+    df_portfolio = df_portfolio.reset_index()
+    print(df_portfolio['date'])
+    return df_portfolio
 
 # calculate_portfolio_history(next(get_db()), base_currency="RUB")
 
@@ -162,24 +208,24 @@ def calculate_positions(db: Session):
         df_transactions.assign(
             shares=lambda x: x["shares"].where(x["type"] == "BUY", -x["shares"]),
             gross_invested=lambda x: x["value_converted"].where(x["type"] == "BUY", 0),
-            gross_withdraw=lambda x: x["value_converted"].where(x["type"] == "SELL", 0),
+            gross_withdrawn=lambda x: x["value_converted"].where(x["type"] == "SELL", 0),
         )
         .groupby(["ticker", "date"], as_index=False)
         .agg({
             "shares": "sum",
             "gross_invested": "sum",
-            "gross_withdraw": "sum",
+            "gross_withdrawn": "sum",
             "close": "first"
         })
         .sort_values(["ticker", "date"])
     )
 
-    df_positions[["shares","gross_invested", "gross_withdraw"]] = (
-        df_positions.groupby("ticker")[["shares","gross_invested", "gross_withdraw"]].cumsum()
+    df_positions[["shares","cum_invested", "cum_withdraw"]] = (
+        df_positions.groupby("ticker")[["shares","gross_invested", "gross_withdrawn"]].cumsum()
     )
     df_positions['value'] = df_positions['shares'] * df_positions['close']
     df_positions["total_pnl"] = (
-            df_positions["value"] + df_positions["gross_withdraw"] - df_positions["gross_invested"]
+            df_positions["value"] + df_positions["cum_withdraw"] - df_positions["cum_invested"]
     )
     # df_positions["total_return_pct"] = (
     #         df_positions["total_pnl"] / df_positions["gross_invested"]

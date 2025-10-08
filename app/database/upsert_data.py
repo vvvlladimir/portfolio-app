@@ -54,7 +54,7 @@ def upsert_prices(db: Session, data: pd.DataFrame) -> int:
 
 def upsert_all_prices(db: Session) -> int:
     try:
-        tickers_db = db.query(Transaction.ticker).distinct().all()
+        tickers_db = db.query(TickerInfo.ticker).distinct().all()
         tickers = [t[0].upper() for t in tickers_db]
 
         if not tickers:
@@ -124,9 +124,6 @@ def upsert_missing_tickers_info(db: Session, tickers: List[str]) -> int:
     return len(to_fetch)
 
 def upsert_portfolio_history(db: Session, base_currency: str = "USD") -> int:
-    """
-    Пересчитывает и сохраняет историю портфеля в базу.
-    """
     try:
         inserted = 0
         data = calculate_portfolio_history(db, base_currency)
@@ -163,7 +160,7 @@ def upsert_positions(db: Session) -> int:
                 "shares": row["shares"],
                 "close": row["close"],
                 "gross_invested": row["gross_invested"],
-                "gross_withdraw": row["gross_withdraw"],
+                "gross_withdrawn": row["gross_withdrawn"],
                 "total_pnl": row["total_pnl"],
             }
             for _, row in data.iterrows()

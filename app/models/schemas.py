@@ -44,7 +44,7 @@ class PositionsOut(BaseModel):
     shares: float | None
     close: float | None
     gross_invested: float | None
-    gross_withdraw: float | None
+    gross_withdrawn: float | None
     total_pnl: float | None
     ticker_info: TickerOut
 
