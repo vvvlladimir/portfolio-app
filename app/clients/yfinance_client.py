@@ -4,6 +4,9 @@ import pandas as pd
 import yfinance as yf
 import time
 
+from app.core.logger import logger
+
+
 def fetch_prices(tickers: List[str], period="5y", interval="1d") -> pd.DataFrame:
     """Fetch historical prices for tickers via Yahoo Finance."""
     data = yf.download(
@@ -17,6 +20,7 @@ def fetch_prices(tickers: List[str], period="5y", interval="1d") -> pd.DataFrame
         raise ValueError("No data found")
 
     data = data.stack().reset_index()
+    logger.info(f"Fetched {len(data)} rows of price data")
     return data
 
 
@@ -38,10 +42,11 @@ def fetch_ticker_info(ticker: str, sleep: float = 0.5) -> dict:
 
         if sleep > 0:
             time.sleep(sleep)
+        logger.info(f"Fetched {len(result)} rows of ticker data")
         return result
 
     except Exception as e:
-        print("Error fetching info for", ticker, ":", str(e))
+        logger.error(f"Error fetching info for {ticker}: {e}")
         return {
             "ticker": ticker.upper(),
             "currency": "USD",
@@ -56,10 +61,10 @@ def fetch_fx_rates(currencies: List[str], period="5y", interval="1d") -> pd.Data
     """Fetch all available unique FX rates for given currencies"""
 
     pairs = [f"{a}{b}=X" for a, b in combinations(currencies, 2)]
-
     if not pairs:
         return pd.DataFrame()
 
+    logger.info(f"Fetching FX pairs: {pairs}")
     data = yf.download(
         pairs,
         period=period,
@@ -71,4 +76,5 @@ def fetch_fx_rates(currencies: List[str], period="5y", interval="1d") -> pd.Data
         raise ValueError("No FX data found")
 
     data = data.stack().reset_index()
+    logger.info(f"Fetched {len(data)} FX rows for {len(pairs)} pairs")
     return data, pairs
