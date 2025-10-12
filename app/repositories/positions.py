@@ -1,5 +1,7 @@
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 from datetime import date, datetime
+
+import pandas as pd
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import func, desc
@@ -121,88 +123,14 @@ class PositionRepository(BaseRepository[Position]):
             logger.error(f"Error getting positions summary: {e}")
             raise RepositoryError("Failed to get positions summary") from e
 
-    def delete_all_positions(self) -> int:
+
+    def upsert_bulk(self, data: Union[List[Dict], pd.DataFrame], **kwargs) -> int:
         """
-        Delete all records from the positions table.
+        Bulk upsert price data with validation.
         """
-        try:
-            deleted = self.db.query(Position).delete(synchronize_session=False)
-            self.db.commit()
-            logger.info(f"Deleted {deleted} position records")
-            return int(deleted or 0)
-        except SQLAlchemyError as e:
-            self.db.rollback()
-            logger.error(f"Error deleting all positions: {e}")
-            raise RepositoryError("Failed to delete positions") from e
 
-    def bulk_insert_positions(self, rows: List[Dict[str, Any]]) -> int:
-        """
-        Bulk insert position records with validation.
-        Expected fields: date, ticker, shares, close, gross_invested, gross_withdrawn, total_pnl
-        """
-        if not rows:
-            return 0
-
-        try:
-            validated_rows = self._validate_position_rows(rows)
-
-            self.db.bulk_insert_mappings(Position, validated_rows)
-            self.db.commit()
-
-            logger.info(f"Successfully inserted {len(validated_rows)} position records")
-            return len(validated_rows)
-
-        except SQLAlchemyError as e:
-            self.db.rollback()
-            logger.error(f"Error bulk inserting positions: {e}")
-            raise RepositoryError("Failed to bulk insert positions") from e
-
-    def _validate_position_rows(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """
-        Validate position data before insertion.
-        """
-        validated_rows = []
-        required_fields = ['date', 'ticker', 'shares']
-
-        for i, row in enumerate(rows):
-            # Check required fields
-            missing_fields = [field for field in required_fields if field not in row or row[field] is None]
-            if missing_fields:
-                logger.warning(f"Row {i} missing required fields: {missing_fields}")
-                continue
-
-            validated_row = row.copy()
-
-            # Normalize ticker
-            validated_row['ticker'] = str(row['ticker']).upper().strip()
-
-            # Validate date
-            try:
-                if isinstance(row['date'], str):
-                    validated_row['date'] = datetime.strptime(row['date'], '%Y-%m-%d').date()
-                elif isinstance(row['date'], datetime):
-                    validated_row['date'] = row['date'].date()
-            except (ValueError, TypeError) as e:
-                logger.warning(f"Row {i}: Invalid date format: {e}")
-                continue
-
-            # Validate numeric values
-            numeric_fields = ['shares', 'close', 'gross_invested', 'gross_withdrawn', 'total_pnl']
-            try:
-                for field in numeric_fields:
-                    if field in row and row[field] is not None:
-                        validated_row[field] = float(row[field])
-
-                # Validate shares is not zero
-                if validated_row.get('shares', 0) == 0:
-                    logger.warning(f"Row {i}: Shares cannot be zero")
-                    continue
-
-                validated_rows.append(validated_row)
-
-            except (ValueError, TypeError) as e:
-                logger.warning(f"Row {i}: Invalid numeric data: {e}")
-                continue
-
-        return validated_rows
+        return super().upsert_bulk(
+            data=data,
+            index_elements=["date", "ticker"]
+        )
 

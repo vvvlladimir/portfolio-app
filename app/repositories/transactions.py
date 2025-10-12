@@ -1,5 +1,7 @@
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 from datetime import date, datetime
+
+import pandas as pd
 from sqlalchemy.orm import joinedload, Session
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import func, desc
@@ -163,28 +165,17 @@ class TransactionRepository(BaseRepository[Transaction]):
             logger.error(f"Error getting transaction currencies: {e}")
             raise RepositoryError("Failed to get transaction currencies") from e
 
-    def bulk_insert_transactions(self, rows: List[Dict[str, Any]]) -> int:
+    def upsert_bulk(self, data: Union[List[Dict], pd.DataFrame], **kwargs) -> int:
         """
-        Bulk insert transaction records with validation.
-        Expected fields: date, type, ticker, currency, shares, value
+        Bulk upsert price data with validation.
         """
-        if not rows:
-            return 0
 
-        try:
-            validated_rows = self._validate_transaction_rows(rows)
+        return super().upsert_bulk(
+            data=data,
+            index_elements=["date"]
+        )
 
-            self.db.bulk_insert_mappings(Transaction, validated_rows)
-            self.db.commit()
-
-            logger.info(f"Successfully inserted {len(validated_rows)} transaction records")
-            return len(validated_rows)
-
-        except SQLAlchemyError as e:
-            self.db.rollback()
-            logger.error(f"Error bulk inserting transactions: {e}")
-            raise RepositoryError("Failed to bulk insert transactions") from e
-
+    # TODO: Implement validation logic
     def _validate_transaction_rows(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Validate transaction data before insertion.

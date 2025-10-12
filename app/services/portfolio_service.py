@@ -1,9 +1,8 @@
 import pandas as pd
 from fastapi import Depends
-
 from app.api.dependencies import get_factory
-from app.clients.yfinance_client import fetch_prices
 from app.repositories import RepositoryFactory
+from app.services.fx_rates_service import FXRateService
 
 
 def calculate_portfolio_history(
@@ -18,47 +17,17 @@ def calculate_portfolio_history(
     currencies = set(df_positions["currency"].unique())
     currencies.discard(base_currency)
 
-    existing_fx = set(df_prices['ticker'] .loc[df_prices['date'] >= df_positions['date'].min()].unique())
-    missing_fx = []
-    fx_pairs = []
-
-    for curr in currencies:
-        direct = f"{curr}{base_currency}=X"
-        if direct in existing_fx:
-            fx_pairs.append(direct)
-            continue
-        inverse_fx = f"{base_currency}{curr}=X"
-        if inverse_fx in existing_fx:
-            fx_pairs.append(inverse_fx)
-            continue
-        if inverse_fx not in missing_fx:
-            missing_fx.append(inverse_fx)
-            missing_fx.append(direct)
-
-    if missing_fx:
-        rows = fetch_prices(missing_fx)
-        if rows is not None:
-            price_repo = factory.get_price_repository()
-            price_repo.upsert_bulk(rows)
-
-
-    df_fx = (
-        df_prices[df_prices['ticker'].isin(fx_pairs)]
-        .loc[df_prices['date'] >= df_positions['date'].min()]
-        [['ticker', 'date', 'close']]
-        .rename(columns={'ticker': 'fx_ticker', 'close': 'rate'})
-    )
-
-    df_fx["date"] = pd.to_datetime(df_fx["date"])
+    df_fx = FXRateService(factory).get_fx_rates(currencies, df_prices, target_currency=base_currency, start_date=df_positions['date'].min())
     all_dates = pd.date_range(df_positions['date'].min(), df_prices['date'].max(), freq='D')
 
+    tickers = df_positions['ticker'].unique()
+    df_all = pd.MultiIndex.from_product([tickers, all_dates], names=['ticker', 'date']).to_frame(index=False)
+
     df_portfolio = (
-        df_positions
-        .set_index('date')
-        .groupby('ticker')[['shares','currency','gross_invested','gross_withdrawn']]
-        .apply(lambda s: s.reindex(all_dates))
-        .reset_index()
-        .rename(columns={'level_1': 'date'})
+        df_all
+        .merge(df_positions.drop(columns=['close']), on=['ticker', 'date'], how='left')
+        .merge(df_prices[['date', 'ticker']], on=['date', 'ticker'], how='left')
+        .sort_values(['ticker', 'date'])
     )
     currencies = set(df_fx["fx_ticker"].unique())
 
@@ -86,7 +55,6 @@ def calculate_portfolio_history(
 
     df_portfolio['fx_ticker'] = df_portfolio['currency'].map(currency_mapping)
     df_portfolio['is_inverse'] = df_portfolio['currency'].map(inverse_flags)
-
     first_buy = df_positions.groupby('ticker')['date'].min().rename('first_buy')
     df_portfolio = df_portfolio.merge(first_buy, on='ticker', how='left')
     df_portfolio = df_portfolio[df_portfolio['date'] >= df_portfolio['first_buy']].drop(columns='first_buy')
@@ -97,13 +65,12 @@ def calculate_portfolio_history(
         .sort_values(['ticker','date'])
     )
 
-    df_portfolio[['shares','currency','close', 'fx_ticker','is_inverse']] = (
-        df_portfolio.groupby('ticker')[['shares','currency','close', 'fx_ticker','is_inverse']].ffill()
-    )
+    cols_ffill = ['shares','currency','close', 'fx_ticker','is_inverse']
+    df_portfolio[cols_ffill] = df_portfolio.groupby('ticker')[cols_ffill].ffill()
+
     df_portfolio = df_portfolio.merge(
         df_fx, on=["date", "fx_ticker"], how="left"
     )
-
 
     df_portfolio["rate"] = df_portfolio.groupby('ticker')["rate"].ffill().fillna(1.0).astype(float)
     df_portfolio.loc[df_portfolio['is_inverse'], 'rate'] = 1 / df_portfolio.loc[df_portfolio['is_inverse'], 'rate']

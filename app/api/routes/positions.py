@@ -63,25 +63,13 @@ def rebuild_positions(factory: RepositoryFactory = Depends(get_factory)):
         columns = [col.key for col in stmt.selected_columns]
         df_transactions = pd.DataFrame(result.all(), columns=columns)
 
-        df = calculate_positions(df_transactions, df_prices)
+        data = calculate_positions(df_transactions, df_prices, factory)
 
-        rows_to_insert = [
-            {
-                "date": r.date.date(),
-                "ticker": r.ticker,
-                "shares": r.shares,
-                "close": r.close,
-                "gross_invested": r.gross_invested,
-                "gross_withdrawn": r.gross_withdrawn,
-                "total_pnl": r.total_pnl,
-            }
-            for r in df.itertuples(index=False)
-        ]
         pos_repo = factory.get_position_repository()
         pos_repo.delete_all()
-        pos_repo.bulk_insert_positions(rows_to_insert)
+        pos_repo.upsert_bulk(data)
 
-        return {"status": "ok", "rows": len(rows_to_insert)}
+        return {"status": "ok", "rows": len(data)}
     except Exception as e:
         logger.error(f"rebuild_positions failed: {e}", exc_info=True)
         raise HTTPException(500, detail="Failed to rebuild positions")

@@ -121,5 +121,5 @@ class TickerRepository(BaseRepository[TickerInfo]):
         """
         return super().upsert_bulk(
             data=data,
-            index_elements=["ticker"],
+            index_elements=["ticker"]
         )

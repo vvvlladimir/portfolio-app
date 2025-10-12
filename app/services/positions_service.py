@@ -1,47 +1,56 @@
 import pandas as pd
+from fastapi import Depends
+
+from app.api.dependencies import get_factory
+from app.repositories import RepositoryFactory
+from app.services.fx_rates_service import FXRateService
+
 
 def calculate_positions(
         df_transactions: pd.DataFrame,
-        df_prices: pd.DataFrame
+        df_prices: pd.DataFrame,
+        factory: RepositoryFactory = Depends(get_factory),
 ) -> pd.DataFrame:
-
-
-    df_transactions["value"] = pd.to_numeric(df_transactions["value"], errors="coerce")
-    df_transactions["shares"] = pd.to_numeric(df_transactions["shares"], errors="coerce")
-    df_prices["close"] = pd.to_numeric(df_prices["close"], errors="coerce")
-
+    """Calculate positions over time from transactions and prices."""
 
     ticker_currency = df_prices.groupby("ticker")["currency"].first()
-
-    df_transactions = df_transactions.assign(
-        market_currency=df_transactions["ticker"].map(ticker_currency)
+    df_positions = df_transactions.copy()
+    df_positions = df_positions.assign(
+        market_currency=df_positions["ticker"].map(ticker_currency)
     )
+    df_positions["date"] = pd.to_datetime(df_positions["date"])
+    currencies = set(df_positions["currency"].unique()) | set(df_positions["market_currency"].unique())
+    
+    df_fx = FXRateService(factory).get_fx_rates(currencies, df_prices, start_date=df_positions['date'].min())
+    
+    df_positions['fx_ticker'] = df_positions['currency'] + df_positions['market_currency'] + "=X"
+    df_positions = pd.merge_asof(
+        df_positions,
+        df_fx,
+        on='date',
+        by='fx_ticker',
+        direction='nearest'
+    ).rename(columns={'rate': 'rate_direct'})
+    df_positions['fx_ticker'] = df_positions['market_currency'] + df_positions['currency'] + "=X"
+    df_positions = pd.merge_asof(
+        df_positions,
+        df_fx,
+        on='date',
+        by='fx_ticker',
+        direction='nearest'
+    ).rename(columns={'rate': 'rate_inverse'})
+    
+    df_positions['rate'] = (df_positions['rate_direct'].fillna(1 / df_positions['rate_inverse'])).fillna(1.0)
+    df_positions['value'] = df_positions['value'] * df_positions['rate']
 
-    fx_rates = (
-        df_prices[df_prices["asset_type"] == "CURRENCY"]
-        .rename(columns={"ticker": "pair", "close": "rate"})
-        .loc[:, ["date", "pair", "rate"]]
-        .dropna()
-    )
-
-    def convert_value(row):
-        if row["currency"] == row["market_currency"]:
-            return row["value"]
-        rate = get_rate(row["currency"], row["market_currency"], row["date"], fx_rates)
-        return row["value"] * rate
-
-    df_transactions["value_converted"] = df_transactions.apply(convert_value, axis=1)
-    df_transactions = df_transactions[["date", "ticker", "value_converted", "type", "shares"]]
-    df_transactions = (
-        df_transactions
-        .merge(df_prices[['date','ticker','close']], on=["date", "ticker"], how="left")
-    )
+    df_positions = df_positions[["date", "ticker", "value", "type", "shares"]]
+    df_positions = df_positions.merge(df_prices[['date','ticker','close']], on=["date", "ticker"], how="left")
 
     df_positions = (
-        df_transactions.assign(
+        df_positions.assign(
             shares=lambda x: x["shares"].where(x["type"] == "BUY", -x["shares"]),
-            gross_invested=lambda x: x["value_converted"].where(x["type"] == "BUY", 0),
-            gross_withdrawn=lambda x: x["value_converted"].where(x["type"] == "SELL", 0),
+            gross_invested=lambda x: x["value"].where(x["type"] == "BUY", 0),
+            gross_withdrawn=lambda x: x["value"].where(x["type"] == "SELL", 0),
         )
         .groupby(["ticker", "date"], as_index=False)
         .agg({
@@ -52,7 +61,7 @@ def calculate_positions(
         })
         .sort_values(["ticker", "date"])
     )
-
+    
     df_positions[["shares","cum_invested", "cum_withdraw"]] = (
         df_positions.groupby("ticker")[["shares","gross_invested", "gross_withdrawn"]].cumsum()
     )

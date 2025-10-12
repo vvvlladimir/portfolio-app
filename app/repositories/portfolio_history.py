@@ -91,50 +91,5 @@ class PortfolioHistoryRepository(BaseRepository[PortfolioHistory]):
         return super().upsert_bulk(
             data=data,
             index_elements=["date"],
-            validate_fn=self._validate_history_rows
         )
-
-    def _validate_history_rows(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """
-        Validate portfolio history data before insertion.
-        """
-        validated_rows = []
-        required_fields = ['date', 'total_value', 'invested_value']
-
-        for i, row in enumerate(rows):
-            # Check required fields
-            missing_fields = [field for field in required_fields if field not in row or row[field] is None]
-            if missing_fields:
-                logger.warning(f"Row {i} missing required fields: {missing_fields}")
-                continue
-
-            validated_row = row.copy()
-
-            # Validate date
-            try:
-                if isinstance(row['date'], str):
-                    validated_row['date'] = datetime.strptime(row['date'], '%Y-%m-%d').date()
-                elif isinstance(row['date'], datetime):
-                    validated_row['date'] = row['date'].date()
-            except (ValueError, TypeError) as e:
-                logger.warning(f"Row {i}: Invalid date format: {e}")
-                continue
-
-            # Validate numeric values
-            numeric_fields = ['total_value', 'invested_value', 'gross_invested', 'gross_withdrawn']
-            try:
-                for field in numeric_fields:
-                    if field in row and row[field] is not None:
-                        validated_row[field] = float(row[field])
-                        if field in ['total_value', 'invested_value'] and validated_row[field] < 0:
-                            logger.warning(f"Row {i}: Negative value for {field}")
-                            break
-                else:
-                    validated_rows.append(validated_row)
-            except (ValueError, TypeError) as e:
-                logger.warning(f"Row {i}: Invalid numeric data: {e}")
-                continue
-
-        return validated_rows
-
 
