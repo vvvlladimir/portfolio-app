@@ -1,7 +1,11 @@
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Union
+
+import pandas as pd
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import func
+
+from app.clients.yfinance_client import fetch_ticker_info
 from app.models import TickerInfo
 from app.repositories.base import BaseRepository, RepositoryError
 import logging
@@ -14,9 +18,7 @@ class TickerRepository(BaseRepository[TickerInfo]):
         super().__init__(db, TickerInfo)
 
     def get_tickers(self, **filters) -> List[TickerInfo]:
-        """
-        Get tickers filtered by optional criteria: symbol, exchange, currency, asset_type.
-        """
+        """Get tickers filtered by optional criteria: symbol, exchange, currency, asset_type"""
         try:
             query = self.db.query(TickerInfo)
             mapping = {
@@ -28,8 +30,7 @@ class TickerRepository(BaseRepository[TickerInfo]):
 
             for key, value in filters.items():
                 if key in mapping and value:
-                    query = query.filter(mapping[key] == self.normalize(value))
-
+                    query = query.filter(mapping[key] == self.normalize_value(value))
             return query.order_by(TickerInfo.ticker).all()
 
         except SQLAlchemyError as e:
@@ -39,9 +40,7 @@ class TickerRepository(BaseRepository[TickerInfo]):
 
 
     def get_ticker_summary(self) -> Dict[str, Any]:
-        """
-        Get ticker summary statistics.
-        """
+        """Get ticker summary statistics"""
         try:
             result = (
                 self.db.query(
@@ -101,59 +100,26 @@ class TickerRepository(BaseRepository[TickerInfo]):
             logger.error(f"Error getting currencies: {e}")
             raise RepositoryError("Failed to get currencies") from e
 
-    def bulk_insert_tickers(self, rows: List[Dict[str, Any]]) -> int:
+    def upsert_bulk_missing(self, tickers: List[str]) -> int:
         """
-        Bulk insert ticker records with validation.
-        Expected fields: ticker, currency, long_name, exchange, asset_type
+        Update missing ticker info records.
         """
-        if not rows:
-            return 0
-
         try:
-            validated_rows = self._validate_ticker_rows(rows)
+            existing_tickers = {ticker.ticker for ticker in self.get_tickers()}
+            missing_tickers = set(tickers) - existing_tickers
+            if missing_tickers:
+                tickers_data = [fetch_ticker_info(ticker) for ticker in missing_tickers]
+                return self.upsert_bulk(tickers_data)
+            return 0
+        except Exception as e:
+            logger.error(f"Error updating missing tickers: {tickers}")
+            raise RepositoryError(f"Failed to update missing tickers: {e}")
 
-            self.db.bulk_insert_mappings(TickerInfo, validated_rows)
-            self.db.commit()
-
-            logger.info(f"Successfully inserted {len(validated_rows)} ticker records")
-            return len(validated_rows)
-
-        except SQLAlchemyError as e:
-            self.db.rollback()
-            logger.error(f"Error bulk inserting tickers: {e}")
-            raise RepositoryError("Failed to bulk insert tickers") from e
-
-    def _validate_ticker_rows(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def upsert_bulk(self, data: Union[List[Dict], pd.DataFrame], **kwargs) -> int:
         """
-        Validate ticker data before insertion.
+        Bulk upsert price data.
         """
-        validated_rows = []
-        required_fields = ['ticker', 'currency']
-
-        for i, row in enumerate(rows):
-            # Check required fields
-            missing_fields = [field for field in required_fields if field not in row or row[field] is None]
-            if missing_fields:
-                logger.warning(f"Row {i} missing required fields: {missing_fields}")
-                continue
-
-            validated_row = row.copy()
-
-            # Normalize string fields
-            validated_row['ticker'] = str(row['ticker']).upper().strip()
-            validated_row['currency'] = str(row['currency']).upper().strip()
-
-            if 'exchange' in row and row['exchange']:
-                validated_row['exchange'] = str(row['exchange']).upper().strip()
-
-            if 'asset_type' in row and row['asset_type']:
-                validated_row['asset_type'] = str(row['asset_type']).upper().strip()
-
-            # Validate ticker symbol is not empty
-            if not validated_row['ticker']:
-                logger.warning(f"Row {i}: Ticker symbol cannot be empty")
-                continue
-
-            validated_rows.append(validated_row)
-
-        return validated_rows
+        return super().upsert_bulk(
+            data=data,
+            index_elements=["ticker"],
+        )

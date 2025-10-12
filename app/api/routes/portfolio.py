@@ -1,7 +1,11 @@
 from typing import List, Optional
+
+import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import cast, Float, select
 
 from app.api.dependencies import get_factory
+from app.models import Price, Position, TickerInfo
 from app.repositories.factory import RepositoryFactory
 from app.schemas.portfolio import PortfolioHistoryOut
 from app.core.logger import logger
@@ -31,29 +35,41 @@ def rebuild_portfolio_history(
     """
     try:
         price_repo = factory.get_price_repository()
+        stmt = (
+            select(
+                Price.date,
+                Price.ticker,
+                cast(Price.close, Float).label("close")
+            )
+        )
+        result = price_repo.db.execute(stmt)
+        columns = [col.key for col in stmt.selected_columns]
+        df_prices = pd.DataFrame(result.all(), columns=columns)
+
         pos_repo = factory.get_position_repository()
+        stmt = (
+            select(
+                Position.date,
+                Position.ticker,
+                cast(Position.shares, Float).label("shares"),
+                cast(Position.close, Float).label("close"),
+                cast(Position.gross_invested, Float).label("gross_invested"),
+                cast(Position.gross_withdrawn, Float).label("gross_withdrawn"),
+                TickerInfo.currency
+            )
+            .join(TickerInfo, Position.ticker == TickerInfo.ticker)
+        )
+
+        result = pos_repo.db.execute(stmt)
+        columns = [col.key for col in stmt.selected_columns]
+        df_positions = pd.DataFrame(result.all(), columns=columns)
+
+        df = calculate_portfolio_history(df_positions, df_prices, base_currency=base_currency, factory=factory)
+
         hist_repo = factory.get_portfolio_history_repository()
-
-        price_rows = price_repo.get_prices_rows()
-        pos_rows = pos_repo.get_all()
-
-        df = calculate_portfolio_history(pos_rows, price_rows, base_currency=base_currency)
-
-        rows_to_insert = [
-            {
-                "date": r.date.date(),
-                "total_value": r.total_value,
-                "invested_value": r.invested_value,
-                "gross_invested": r.gross_invested,
-                "gross_withdrawn": r.gross_withdrawn,
-            }
-            for r in df.itertuples(index=False)
-        ]
-
         hist_repo.delete_all()
-        hist_repo.bulk_insert_history(rows_to_insert)
-
-        return {"status": "ok", "rows": len(rows_to_insert), "base_currency": base_currency}
+        inserted = hist_repo.upsert_bulk(df)
+        return {"status": "ok", "rows": inserted, "base_currency": base_currency}
     except Exception as e:
         logger.error(f"rebuild_portfolio_history failed: {e}", exc_info=True)
         raise HTTPException(500, detail="Failed to rebuild portfolio history")

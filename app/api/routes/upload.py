@@ -28,7 +28,6 @@ async def upload_transactions_csv(
         if not required.issubset(set(map(str.lower, df.columns))):
             raise HTTPException(400, detail=f"CSV must contain columns: {required}")
 
-        # Нормализация
         cols = {c: c.lower() for c in df.columns}
         df = df.rename(columns=cols)
 

@@ -16,14 +16,10 @@ def list_prices(
         date_to: Optional[date] = None,
         factory: RepositoryFactory = Depends(get_factory),
 ):
-    """
-    Вернуть цены с опциональными фильтрами.
-    """
+    """Get price rows filtered by optional tickers and date range."""
     try:
         repo = factory.get_price_repository()
-        rows = repo.get_prices_rows(tickers=tickers, date_from=date_from, date_to=date_to)
-        # Возвращаем как есть (ORM объекты сериализуются автоматически, если поля простые)
-        # при желании можно сделать отдельные схемы для прайсов
+        rows = repo.get_prices_by_filters(tickers=tickers, date_from=date_from, date_to=date_to)
         return rows
     except Exception as e:
         logger.error(f"list_prices failed: {e}", exc_info=True)
@@ -34,26 +30,33 @@ def list_prices(
 def refresh_market_data(
         factory: RepositoryFactory = Depends(get_factory),
 ):
-    """
-    Простой пример «обновления рынка»: берём все тикеры из БД и апдейтим их котировки+FX.
-    Тут подразумевается, что у тебя есть сервис ingestion (если нет — можно прямо тут вызывать clients+yfinance).
-    """
+    """Refresh market data for all tickers in the database."""
     try:
         ticker_repo = factory.get_ticker_repository()
         price_repo = factory.get_price_repository()
 
-        tickers = [t.ticker for t in ticker_repo.get_all()]
+        tickers = [ticker.ticker for ticker in ticker_repo.get_tickers()]
         if not tickers:
             raise HTTPException(400, detail="No tickers in database")
 
-        # Ниже — псевдо-логика, если у тебя есть services/clients.
-        # Если их ещё нет, вызвать напрямую твой clients.yfinance_client
-        # и затем price_repo.upsert_prices_bulk(...)
-        # from app.clients.yfinance_client import fetch_prices, fetch_fx_rates
-        # df = fetch_prices(tickers)
-        # inserted = price_repo.upsert_prices_bulk(df_normalized_records)
+        from app.clients.yfinance_client import fetch_prices
 
-        return {"status": "ok", "tickers": tickers}
+        try:
+            price_data = fetch_prices(tickers)
+            if price_data is not None:
+                inserted = price_repo.upsert_bulk(price_data)
+                logger.info(f"Updated {inserted} price records for {tickers}")
+            else:
+                logger.warning(f"No price data available for {tickers}")
+        except Exception as e:
+            logger.error(f"Failed to refresh prices for {tickers}: {e}")
+
+        result = {
+            "status": "success",
+            "total_tickers": len(tickers),
+        }
+        return result
+
     except HTTPException:
         raise
     except Exception as e:

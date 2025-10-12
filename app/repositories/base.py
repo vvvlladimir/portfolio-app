@@ -1,12 +1,15 @@
-from typing import Generic, TypeVar, Type, List, Optional, Dict, Any, Union
-from sqlalchemy.orm import Session
+import re
+from typing import Generic, TypeVar, Type, List, Optional, Dict, Any, Union, Sequence, Callable
+from slugify import slugify
+
+import pandas as pd
 from sqlalchemy.exc import SQLAlchemyError
 from app.core.db import Base
 from app.core.logger import logger
+from sqlalchemy.orm import Session
+from sqlalchemy.dialects.postgresql import insert
 
 T = TypeVar("T", bound=Base)
-
-
 
 class RepositoryError(Exception):
     """Custom exception for repository operations"""
@@ -19,9 +22,36 @@ class BaseRepository(Generic[T]):
         self.model = model
 
     @staticmethod
-    def normalize(value: Optional[str]) -> Optional[str]:
-        """Normalize string values for consistent filtering"""
-        return value.upper().strip() if isinstance(value, str) else None
+    def _snakeify(s: str) -> str:
+        if not isinstance(s, str):
+            return s
+        s = s.strip()
+        return slugify(s, separator="_", lowercase=True)
+
+    @staticmethod
+    def normalize_header(
+            value: Optional[Union[str, List[str], pd.DataFrame, List[Dict[str, Any]]]]
+    ) -> Optional[Union[str, List[str], pd.DataFrame, List[Dict[str, Any]]]]:
+        if value is None:
+            return None
+
+        if isinstance(value, str):
+            return BaseRepository._snakeify(value)
+
+        if isinstance(value, list):
+            if value and isinstance(value[0], dict):
+                return [{BaseRepository._snakeify(k): v for k, v in rec.items()} for rec in value]
+            return [BaseRepository._snakeify(v) for v in value]
+
+        if isinstance(value, pd.DataFrame):
+            df = value.copy()
+            df.columns = [BaseRepository._snakeify(c) for c in df.columns]
+            return df
+
+        raise TypeError(
+            f"Unsupported type for normalize_header: {type(value).__name__}. "
+            "Expected str, list, pandas.DataFrame, or list of dictionaries."
+        )
 
     def get(self, id_: Union[int, str]) -> Optional[T]:
         """Get a single record by ID"""
@@ -131,3 +161,74 @@ class BaseRepository(Generic[T]):
         except SQLAlchemyError as e:
             logger.error(f"Error counting {self.model.__name__}: {e}")
             raise RepositoryError(f"Failed to count {self.model.__name__}") from e
+
+    def _validate_data(self, rows: List[Dict]) -> List[Dict]:
+        """
+        Basic validation function that normalizes headers and checks if data matches repository model.
+        """
+        if not rows:
+            return []
+        try:
+            rows = self.normalize_header(rows)
+
+            model_columns = set(column.name for column in self.model.__table__.columns)
+
+            validated_rows = []
+            for i, row in enumerate(rows):
+                if not isinstance(row, dict):
+                    logger.warning(f"Row {i} is not a dictionary, skipping")
+                    continue
+
+                valid_row = {}
+                for key, value in row.items():
+                    if key in model_columns:
+                        valid_row[key] = value
+                    else:
+                        logger.debug(f"Row {i}: ignoring field '{key}' not in model {self.model.__name__}")
+
+                if valid_row:
+                    validated_rows.append(valid_row)
+                else:
+                    logger.warning(f"Row {i} has no valid fields for model {self.model.__name__}")
+
+            return validated_rows
+
+        except Exception as e:
+            logger.error(f"Error validating data structure for {self.model.__name__}: {e}")
+            raise RepositoryError(f"Failed to validate data structure") from e
+
+
+    def upsert_bulk(
+            self,
+            data: Union[List[Dict], pd.DataFrame],
+            index_elements: Optional[List[str]] = None,
+            validate_fn: Optional[Callable[[List[Dict]], List[Dict]]] = None
+    ) -> int:
+        """Bulk upsert records with optional validation and conflict handling."""
+        if data is None or len(data) == 0:
+            return 0
+
+        try:
+            if isinstance(data, pd.DataFrame):
+                data = data.to_dict(orient="records")
+
+            data = self._validate_data(data)
+            if validate_fn:
+                data = validate_fn(data)
+
+            if not data:
+                return 0
+
+            stmt = insert(self.model).values(data)
+            if index_elements:
+                stmt = stmt.on_conflict_do_nothing(index_elements=index_elements)
+
+            result = self.db.execute(stmt)
+            self.db.commit()
+
+            return int(result.rowcount or 0)
+
+        except SQLAlchemyError as e:
+            self.db.rollback()
+            logger.error(f"Error upserting {self.model.__name__}: {e}")
+            raise RepositoryError(f"Failed to upsert {self.model.__name__}") from e

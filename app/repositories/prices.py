@@ -1,8 +1,9 @@
-from typing import Iterable, List, Dict, Optional
+from typing import Iterable, List, Dict, Optional, Union
 from datetime import date
+
+import pandas as pd
 from sqlalchemy import func
 from sqlalchemy.orm import Session
-from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import SQLAlchemyError
 from app.models import Price
 from app.repositories.base import BaseRepository, RepositoryError
@@ -28,7 +29,6 @@ class PriceRepository(BaseRepository[Price]):
             query = self.db.query(Price)
 
             if tickers:
-                # Normalize tickers to uppercase
                 normalized_tickers = [t.upper() for t in tickers if t.strip()]
                 if normalized_tickers:
                     query = query.filter(Price.ticker.in_(normalized_tickers))
@@ -110,70 +110,27 @@ class PriceRepository(BaseRepository[Price]):
             logger.error(f"Error getting price range for {ticker}: {e}")
             raise RepositoryError(f"Failed to get price range for {ticker}") from e
 
-    def upsert_prices_bulk(self, rows: List[Dict]) -> int:
+    def upsert_bulk(self, data: Union[List[Dict], pd.DataFrame], **kwargs) -> int:
         """
-        Bulk upsert prices with validation.
-        Expected fields: ticker, date, open, high, low, close, volume.
+        Bulk upsert price data with validation.
         """
-        if not rows:
-            return 0
 
+        return super().upsert_bulk(
+            data=data,
+            index_elements=["ticker", "date"],
+            validate_fn=self._validate_prices
+        )
+
+    def _validate_prices(self, rows: List[Dict]) -> List[Dict]:
+        """Validate tickers are in DB before insertion."""
         try:
-            # Validate and normalize data
-            validated_rows = self._validate_price_rows(rows)
-
-            stmt = insert(Price).values(validated_rows).on_conflict_do_nothing(
-                index_elements=["ticker", "date"]
+            from app.repositories import TickerRepository
+            ticker_repo = TickerRepository(self.db)
+            ticker_repo.upsert_bulk_missing(
+                set({row.get("ticker", "") for row in rows if "ticker" in row})
             )
-            result = self.db.execute(stmt)
-            self.db.commit()
-
-            inserted_count = int(result.rowcount or 0)
-            logger.info(f"Successfully upserted {inserted_count} price records")
-            return inserted_count
+            return rows
 
         except Exception as e:
-            self.db.rollback()
-            logger.error(f"Error upserting prices: {e}")
-            raise RepositoryError("Failed to upsert prices") from e
-
-    def _validate_price_rows(self, rows: List[Dict]) -> List[Dict]:
-        """
-        Validate price data before insertion.
-        """
-        validated_rows = []
-        required_fields = ['ticker', 'date', 'open', 'high', 'low', 'close']
-
-        for i, row in enumerate(rows):
-            # Check required fields
-            missing_fields = [field for field in required_fields if field not in row or row[field] is None]
-            if missing_fields:
-                logger.warning(f"Row {i} missing required fields: {missing_fields}")
-                continue
-
-            # Normalize ticker
-            validated_row = row.copy()
-            validated_row['ticker'] = str(row['ticker']).upper().strip()
-
-            # Validate price values
-            price_fields = ['open', 'high', 'low', 'close']
-            try:
-                for field in price_fields:
-                    value = float(row[field])
-                    if value <= 0:
-                        logger.warning(f"Row {i}: Invalid {field} value: {value}")
-                        break
-                    validated_row[field] = value
-                else:
-                    # Validate high >= low, etc.
-                    if (validated_row['high'] >= validated_row['low'] and
-                        validated_row['open'] > 0 and validated_row['close'] > 0):
-                        validated_rows.append(validated_row)
-                    else:
-                        logger.warning(f"Row {i}: Invalid price relationships")
-            except (ValueError, TypeError) as e:
-                logger.warning(f"Row {i}: Invalid price data: {e}")
-                continue
-
-        return validated_rows
-
+            logger.exception(f"Error validating tickers during price validation: {e}")
+            return rows

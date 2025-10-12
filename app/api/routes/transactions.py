@@ -19,9 +19,7 @@ def list_transactions(
         include_ticker_info: bool = True,
         factory: RepositoryFactory = Depends(get_factory),
 ):
-    """
-    Вернуть транзакции с фильтрами.
-    """
+    """Get transactions filtered by optional parameters."""
     try:
         repo = factory.get_transaction_repository()
         rows = repo.get_transactions(

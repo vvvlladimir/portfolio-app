@@ -1,5 +1,7 @@
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 from datetime import date, datetime
+
+import pandas as pd
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import func, desc
@@ -82,41 +84,15 @@ class PortfolioHistoryRepository(BaseRepository[PortfolioHistory]):
             logger.error(f"Error getting portfolio performance summary: {e}")
             raise RepositoryError("Failed to get portfolio performance summary") from e
 
-    def delete_all_history(self) -> int:
+    def upsert_bulk(self, data: Union[List[Dict], pd.DataFrame], **kwargs) -> int:
         """
-        Delete all records from the portfolio_history table.
+        Bulk upsert price data with validation.
         """
-        try:
-            deleted = self.db.query(PortfolioHistory).delete(synchronize_session=False)
-            self.db.commit()
-            logger.info(f"Deleted {deleted} portfolio history records")
-            return int(deleted or 0)
-        except SQLAlchemyError as e:
-            self.db.rollback()
-            logger.error(f"Error deleting all portfolio history: {e}")
-            raise RepositoryError("Failed to delete portfolio history") from e
-
-    def bulk_insert_history(self, rows: List[Dict[str, Any]]) -> int:
-        """
-        Bulk insert portfolio history records with validation.
-        Expected fields: date, total_value, invested_value, gross_invested, gross_withdrawn
-        """
-        if not rows:
-            return 0
-
-        try:
-            validated_rows = self._validate_history_rows(rows)
-
-            self.db.bulk_insert_mappings(PortfolioHistory, validated_rows)
-            self.db.commit()
-
-            logger.info(f"Successfully inserted {len(validated_rows)} portfolio history records")
-            return len(validated_rows)
-
-        except SQLAlchemyError as e:
-            self.db.rollback()
-            logger.error(f"Error bulk inserting portfolio history: {e}")
-            raise RepositoryError("Failed to bulk insert portfolio history") from e
+        return super().upsert_bulk(
+            data=data,
+            index_elements=["date"],
+            validate_fn=self._validate_history_rows
+        )
 
     def _validate_history_rows(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """

@@ -25,7 +25,7 @@ def init_timescale(db: Session):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("🚀 Starting up Portfolio API...")
+    logger.info("Starting up Portfolio API...")
     init_db()
     with SessionLocal() as db:
         init_timescale(db)

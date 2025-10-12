@@ -146,6 +146,23 @@ class TransactionRepository(BaseRepository[Transaction]):
             logger.error(f"Error getting transaction types: {e}")
             raise RepositoryError("Failed to get transaction types") from e
 
+    def get_transaction_currencies(self) -> List[str]:
+        """
+        Get all unique currencies types in the database.
+        """
+        try:
+            result = (
+                self.db.query(Transaction.currency)
+                .distinct()
+                .order_by(Transaction.currency)
+                .all()
+            )
+            return [row.currency for row in result]
+
+        except SQLAlchemyError as e:
+            logger.error(f"Error getting transaction currencies: {e}")
+            raise RepositoryError("Failed to get transaction currencies") from e
+
     def bulk_insert_transactions(self, rows: List[Dict[str, Any]]) -> int:
         """
         Bulk insert transaction records with validation.

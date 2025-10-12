@@ -1,9 +1,11 @@
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException
 from app.api.dependencies import get_factory
 from app.repositories.factory import RepositoryFactory
 from app.core.logger import logger
-from app.schemas.ticker import TickersRequest, TickerOut
+from app.schemas.ticker import TickerOut
+from app.clients.yfinance_client import fetch_ticker_info
+from app.services.fx_rates_service import FXRateService
 
 router = APIRouter()
 
@@ -27,32 +29,32 @@ def list_tickers(
         raise HTTPException(500, detail="Failed to list tickers")
 
 
-@router.post("/ensure")
-def ensure_tickers_info(
-        tickers: Optional[List[str]] = Query(default=None),
+@router.post("/refresh")
+def refresh_tickers_info(
         factory: RepositoryFactory = Depends(get_factory),
 ):
     """
-    Ensure that the given tickers exist in the database, fetching missing ones
+    Ensure that all tickers from transactions exist in the database, fetching missing ones
     """
     try:
-        repo = factory.get_ticker_repository()
+        ticker_repo = factory.get_ticker_repository()
+        existing_currencies = set(ticker.currency for ticker in ticker_repo.get_tickers())
 
-        existing_tickers = repo.get_tickers()
-        existing_symbols = {ticker.ticker for ticker in existing_tickers}
+        transaction_repo = factory.get_transaction_repository()
+        requested_tickers = set(transaction_repo.get_all_tickers())
+        requested_currencies = set(transaction_repo.get_transaction_currencies())
 
-        if not tickers:
-            requested_symbols = set(factory.get_transaction_repository().get_all_tickers())
-        else:
-            requested_symbols = set(tickers)
-        missing = requested_symbols - existing_symbols
+        fx_rates, fx_missing = FXRateService(factory).get_needed_pairs(
+            requested_currencies | existing_currencies
+        )
+
+        missing = requested_tickers | set(fx_missing)
+
         if not missing:
-            return {"status": "ok", "inserted": 0, "missing": []}
+            return {"status": "ok", "inserted": 0, "missing": missing}
 
-        from app.clients.yfinance_client import fetch_ticker_info
-        rows = [fetch_ticker_info(t) for t in missing]
-        inserted = repo.bulk_insert_tickers(rows)
-        return {"status": "ok", "inserted": inserted, "missing": list(missing)}
+        inserted = ticker_repo.upsert_bulk_missing(missing)
+        return {"status": "ok", "inserted": inserted, "missing": missing}
     except Exception as e:
-        logger.error(f"ensure_tickers_info failed: {e}", exc_info=True)
-        raise HTTPException(500, detail="Failed to ensure tickers info")
+        logger.error(f"refresh_tickers_info failed: {e}", exc_info=True)
+        raise HTTPException(500, detail="Failed to refresh tickers info")

@@ -1,7 +1,11 @@
 from typing import List
+
+import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select, cast, Float
 
 from app.api.dependencies import get_factory
+from app.models import Price, TickerInfo, Transaction
 from app.repositories.factory import RepositoryFactory
 from app.schemas.positions import PositionsOut
 from app.core.logger import logger
@@ -30,14 +34,36 @@ def rebuild_positions(factory: RepositoryFactory = Depends(get_factory)):
     Compute and rebuild the entire positions table from transactions and prices.
     """
     try:
-        tx_repo = factory.get_transaction_repository()
         price_repo = factory.get_price_repository()
-        pos_repo = factory.get_position_repository()
+        stmt = (
+            select(
+                Price.date,
+                Price.ticker,
+                cast(Price.close, Float).label("close"),
+                TickerInfo.currency
+            )
+            .join(TickerInfo, Price.ticker == TickerInfo.ticker)
+        )
+        result = price_repo.db.execute(stmt)
+        columns = [col.key for col in stmt.selected_columns]
+        df_prices = pd.DataFrame(result.all(), columns=columns)
 
-        tx_rows = tx_repo.get_transactions_by_filters()
-        price_rows = price_repo.get_prices_by_filters()
+        tx_repo = factory.get_transaction_repository()
+        stmt = (
+            select(
+                Transaction.date,
+                Transaction.type,
+                Transaction.ticker,
+                Transaction.currency,
+                cast(Transaction.shares, Float).label("shares"),
+                cast(Transaction.value, Float).label("value")
+            )
+        )
+        result = tx_repo.db.execute(stmt)
+        columns = [col.key for col in stmt.selected_columns]
+        df_transactions = pd.DataFrame(result.all(), columns=columns)
 
-        df = calculate_positions(tx_rows, price_rows)
+        df = calculate_positions(df_transactions, df_prices)
 
         rows_to_insert = [
             {
@@ -51,7 +77,7 @@ def rebuild_positions(factory: RepositoryFactory = Depends(get_factory)):
             }
             for r in df.itertuples(index=False)
         ]
-
+        pos_repo = factory.get_position_repository()
         pos_repo.delete_all()
         pos_repo.bulk_insert_positions(rows_to_insert)
 
