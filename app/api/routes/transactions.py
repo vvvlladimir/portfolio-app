@@ -22,9 +22,9 @@ def list_transactions(
     """Get transactions filtered by optional parameters."""
     try:
         repo = factory.get_transaction_repository()
-        rows = repo.get_transactions(
+        rows = repo.get_by_filters(
             ticker=ticker,
-            tx_type=type,
+            type=type,
             date_from=date_from,
             date_to=date_to,
             include_ticker_info=include_ticker_info,

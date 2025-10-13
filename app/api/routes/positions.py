@@ -1,24 +1,21 @@
+from datetime import date
 from typing import List
-
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select, cast, Float
-
 from app.api.dependencies import get_factory
-from app.models import Price, TickerInfo, Transaction
+from app.models import Price, TickerInfo, Transaction, Position
 from app.repositories.factory import RepositoryFactory
 from app.schemas.positions import PositionsOut
 from app.core.logger import logger
-from app.services.positions_service import calculate_positions
+from app.services.positions_service import calculate_positions, get_snapshot_positions
 
 router = APIRouter()
 
 
 @router.get("/", response_model=List[PositionsOut])
 def list_positions(factory: RepositoryFactory = Depends(get_factory)):
-    """
-    Return all positions.
-    """
+    """Return all positions."""
     try:
         repo = factory.get_position_repository()
         rows = repo.get_all()
@@ -28,11 +25,42 @@ def list_positions(factory: RepositoryFactory = Depends(get_factory)):
         raise HTTPException(500, detail="Failed to list positions")
 
 
+@router.get("/snapshot", response_model=List[PositionsOut])
+def snapshot_positions(
+        as_of: date = date.today(),
+        factory: RepositoryFactory = Depends(get_factory)
+):
+    """Return a snapshot of current positions with market values."""
+    try:
+        price_repo = factory.get_price_repository()
+        stmt = select(Price)
+        df_prices = pd.read_sql(stmt, price_repo.db.bind)
+
+        pos_repo = factory.get_position_repository()
+        stmt = select(Position, TickerInfo).join(TickerInfo)
+        df_positions = pd.read_sql(stmt, pos_repo.db.bind)
+
+        data = get_snapshot_positions(df_positions, df_prices, as_of)
+
+        data["ticker_info"] = data.apply(
+            lambda r: {
+                "ticker": r["ticker_1"],
+                "currency": r["currency"],
+                "long_name": r["long_name"],
+                "exchange": r["exchange"],
+                "asset_type": r["asset_type"],
+            },
+            axis=1
+        )
+        data = data.drop(columns=["ticker_1", "currency", "long_name", "exchange", "asset_type"])
+        return [PositionsOut.model_validate(r) for r in data.to_dict(orient="records")]
+    except Exception as e:
+        logger.error(f"snapshot_positions failed: {e}", exc_info=True)
+        raise HTTPException(500, detail="Failed to get positions snapshot")
+
 @router.post("/rebuild")
 def rebuild_positions(factory: RepositoryFactory = Depends(get_factory)):
-    """
-    Compute and rebuild the entire positions table from transactions and prices.
-    """
+    """Compute and rebuild the entire positions table from transactions and prices."""
     try:
         price_repo = factory.get_price_repository()
         stmt = (

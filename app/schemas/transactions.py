@@ -1,4 +1,6 @@
 from enum import Enum
+from typing import Optional
+
 from pydantic import BaseModel, ConfigDict
 from datetime import date
 
@@ -27,6 +29,6 @@ class TransactionsOut(BaseModel):
     currency: str | None
     shares: float | None
     value: float | None
-    ticker_info: TickerOut
+    ticker_info: Optional[TickerOut] = None
 
     model_config = ConfigDict(from_attributes=True)

@@ -2,7 +2,7 @@ from typing import List, Dict, Any, Optional, Union
 from datetime import date, datetime
 
 import pandas as pd
-from sqlalchemy.orm import joinedload, Session
+from sqlalchemy.orm import joinedload, Session, noload
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import func, desc
 from app.models import Transaction
@@ -34,28 +34,25 @@ class TransactionRepository(BaseRepository[Transaction]):
             raise RepositoryError("Failed to get all tickers") from e
 
 
-    def get_transactions_by_filters(
-        self,
-        ticker: Optional[str] = None,
-        transaction_type: Optional[str] = None,
-        date_from: Optional[date] = None,
-        date_to: Optional[date] = None,
-        include_ticker_info: bool = True
+    def get_by_filters(
+            self,
+            ticker: Optional[str] = None,
+            type: Optional[str] = None,
+            date_from: Optional[date] = None,
+            date_to: Optional[date] = None,
+            include_ticker_info: bool = False,
+            **kwargs
     ) -> List[Transaction]:
         """
-        Get transactions filtered by optional criteria.
+        Override base get_by_filters to handle Transaction-specific filtering logic.
         """
         try:
             query = self.db.query(Transaction)
 
             if include_ticker_info:
                 query = query.options(joinedload(Transaction.ticker_info))
-
-            if ticker:
-                query = query.filter(Transaction.ticker == ticker.upper())
-
-            if transaction_type:
-                query = query.filter(Transaction.type == transaction_type.upper())
+            else:
+                query = query.options(noload(Transaction.ticker_info))
 
             if date_from:
                 query = query.filter(Transaction.date >= date_from)
@@ -63,73 +60,17 @@ class TransactionRepository(BaseRepository[Transaction]):
             if date_to:
                 query = query.filter(Transaction.date <= date_to)
 
-            return query.order_by(Transaction.date.desc()).all()
 
-        except SQLAlchemyError as e:
-            logger.error(f"Error getting transactions with filters: {e}")
-            raise RepositoryError("Failed to get transactions") from e
-
-    def get_transactions_summary(self) -> Dict[str, Any]:
-        """
-        Get transactions summary statistics.
-        """
-        try:
-            result = (
-                self.db.query(
-                    func.count(Transaction.id).label('total_transactions'),
-                    func.count(func.distinct(Transaction.ticker)).label('unique_tickers'),
-                    func.sum(func.case(
-                        [(Transaction.type == 'BUY', Transaction.value)], else_=0
-                    )).label('total_bought'),
-                    func.sum(func.case(
-                        [(Transaction.type == 'SELL', Transaction.value)], else_=0
-                    )).label('total_sold'),
-                    func.sum(func.case(
-                        [(Transaction.type == 'BUY', Transaction.shares)], else_=0
-                    )).label('shares_bought'),
-                    func.sum(func.case(
-                        [(Transaction.type == 'SELL', Transaction.shares)], else_=0
-                    )).label('shares_sold'),
-                    func.min(Transaction.date).label('first_transaction_date'),
-                    func.max(Transaction.date).label('last_transaction_date')
-                )
-                .first()
-            )
-
-            if result:
-                return {
-                    'total_transactions': int(result.total_transactions) if result.total_transactions else 0,
-                    'unique_tickers': int(result.unique_tickers) if result.unique_tickers else 0,
-                    'total_bought': float(result.total_bought) if result.total_bought else 0,
-                    'total_sold': float(result.total_sold) if result.total_sold else 0,
-                    'shares_bought': float(result.shares_bought) if result.shares_bought else 0,
-                    'shares_sold': float(result.shares_sold) if result.shares_sold else 0,
-                    'net_investment': float((result.total_bought or 0) - (result.total_sold or 0)),
-                    'first_transaction_date': result.first_transaction_date,
-                    'last_transaction_date': result.last_transaction_date
-                }
-            return {}
-
-        except SQLAlchemyError as e:
-            logger.error(f"Error getting transactions summary: {e}")
-            raise RepositoryError("Failed to get transactions summary") from e
-
-    def get_transactions_by_ticker(self, ticker: str, include_ticker_info: bool = True) -> List[Transaction]:
-        """
-        Get all transactions for a specific ticker.
-        """
-        try:
-            ticker = ticker.upper()
-            query = self.db.query(Transaction).filter(Transaction.ticker == ticker)
-
-            if include_ticker_info:
-                query = query.options(joinedload(Transaction.ticker_info))
+            for key, value in kwargs.items():
+                if hasattr(Transaction, key) and value is not None:
+                    query = query.filter(getattr(Transaction, key) == value)
 
             return query.order_by(Transaction.date.desc()).all()
 
         except SQLAlchemyError as e:
-            logger.error(f"Error getting transactions for ticker {ticker}: {e}")
-            raise RepositoryError(f"Failed to get transactions for ticker {ticker}") from e
+            logger.error(f"Error filtering transactions: {e}")
+            raise RepositoryError("Failed to filter transactions") from e
+
 
     def get_transaction_types(self) -> List[str]:
         """
@@ -171,65 +112,19 @@ class TransactionRepository(BaseRepository[Transaction]):
         """
 
         return super().upsert_bulk(
-            data=data,
-            index_elements=["date"]
+            data=data
         )
 
-    # TODO: Implement validation logic
-    def _validate_transaction_rows(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """
-        Validate transaction data before insertion.
-        """
-        validated_rows = []
-        required_fields = ['date', 'type', 'ticker', 'currency', 'shares', 'value']
-        valid_types = ['BUY', 'SELL', 'DIVIDEND']
+    def _validate_prices(self, rows: List[Dict]) -> List[Dict]:
+        """Validate tickers are in DB before insertion."""
+        try:
+            from app.repositories import TickerRepository
+            ticker_repo = TickerRepository(self.db)
+            ticker_repo.upsert_bulk_missing(
+                set({row.get("ticker", "") for row in rows if "ticker" in row})
+            )
+            return rows
 
-        for i, row in enumerate(rows):
-            # Check required fields
-            missing_fields = [field for field in required_fields if field not in row or row[field] is None]
-            if missing_fields:
-                logger.warning(f"Row {i} missing required fields: {missing_fields}")
-                continue
-
-            validated_row = row.copy()
-
-            # Normalize ticker and type
-            validated_row['ticker'] = str(row['ticker']).upper().strip()
-            validated_row['type'] = str(row['type']).upper().strip()
-            validated_row['currency'] = str(row['currency']).upper().strip()
-
-            # Validate transaction type
-            if validated_row['type'] not in valid_types:
-                logger.warning(f"Row {i}: Invalid transaction type: {validated_row['type']}")
-                continue
-
-            # Validate date
-            try:
-                if isinstance(row['date'], str):
-                    validated_row['date'] = datetime.strptime(row['date'], '%Y-%m-%d').date()
-                elif isinstance(row['date'], datetime):
-                    validated_row['date'] = row['date'].date()
-            except (ValueError, TypeError) as e:
-                logger.warning(f"Row {i}: Invalid date format: {e}")
-                continue
-
-            # Validate numeric values
-            try:
-                validated_row['shares'] = float(row['shares'])
-                validated_row['value'] = float(row['value'])
-
-                if validated_row['shares'] <= 0:
-                    logger.warning(f"Row {i}: Shares must be positive")
-                    continue
-
-                if validated_row['value'] <= 0:
-                    logger.warning(f"Row {i}: Value must be positive")
-                    continue
-
-                validated_rows.append(validated_row)
-
-            except (ValueError, TypeError) as e:
-                logger.warning(f"Row {i}: Invalid numeric data: {e}")
-                continue
-
-        return validated_rows
+        except Exception as e:
+            logger.exception(f"Error validating tickers during price validation: {e}")
+            return rows

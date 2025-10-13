@@ -21,38 +21,6 @@ class BaseRepository(Generic[T]):
         self.db = db
         self.model = model
 
-    @staticmethod
-    def _snakeify(s: str) -> str:
-        if not isinstance(s, str):
-            return s
-        s = s.strip()
-        return slugify(s, separator="_", lowercase=True)
-
-    @staticmethod
-    def normalize_header(
-            value: Optional[Union[str, List[str], pd.DataFrame, List[Dict[str, Any]]]]
-    ) -> Optional[Union[str, List[str], pd.DataFrame, List[Dict[str, Any]]]]:
-        if value is None:
-            return None
-
-        if isinstance(value, str):
-            return BaseRepository._snakeify(value)
-
-        if isinstance(value, list):
-            if value and isinstance(value[0], dict):
-                return [{BaseRepository._snakeify(k): v for k, v in rec.items()} for rec in value]
-            return [BaseRepository._snakeify(v) for v in value]
-
-        if isinstance(value, pd.DataFrame):
-            df = value.copy()
-            df.columns = [BaseRepository._snakeify(c) for c in df.columns]
-            return df
-
-        raise TypeError(
-            f"Unsupported type for normalize_header: {type(value).__name__}. "
-            "Expected str, list, pandas.DataFrame, or list of dictionaries."
-        )
-
     def get(self, id_: Union[int, str]) -> Optional[T]:
         """Get a single record by ID"""
         try:
@@ -73,6 +41,10 @@ class BaseRepository(Generic[T]):
             logger.error(f"Error filtering {self.model.__name__}: {e}")
             raise RepositoryError(f"Failed to filter {self.model.__name__}") from e
 
+    # TODO: check is it effective than
+    #         price_repo = factory.get_price_repository()
+    #         stmt = select(Price)
+    #         df_prices = pd.read_sql(stmt, price_repo.db.bind)
     def get_all(self, limit: Optional[int] = None, offset: Optional[int] = None) -> List[T]:
         """Get all records with optional pagination"""
         try:
@@ -162,10 +134,40 @@ class BaseRepository(Generic[T]):
             logger.error(f"Error counting {self.model.__name__}: {e}")
             raise RepositoryError(f"Failed to count {self.model.__name__}") from e
 
+    @staticmethod
+    def _snakeify(s: str) -> str:
+        if not isinstance(s, str):
+            return s
+        s = s.strip()
+        return slugify(s, separator="_", lowercase=True)
+
+    @staticmethod
+    def normalize_header(
+            value: Optional[Union[str, List[str], pd.DataFrame, List[Dict[str, Any]]]]
+    ) -> Optional[Union[str, List[str], pd.DataFrame, List[Dict[str, Any]]]]:
+        if value is None:
+            return None
+
+        if isinstance(value, str):
+            return BaseRepository._snakeify(value)
+
+        if isinstance(value, list):
+            if value and isinstance(value[0], dict):
+                return [{BaseRepository._snakeify(k): v for k, v in rec.items()} for rec in value]
+            return [BaseRepository._snakeify(v) for v in value]
+
+        if isinstance(value, pd.DataFrame):
+            df = value.copy()
+            df.columns = [BaseRepository._snakeify(c) for c in df.columns]
+            return df
+
+        raise TypeError(
+            f"Unsupported type for normalize_header: {type(value).__name__}. "
+            "Expected str, list, pandas.DataFrame, or list of dictionaries."
+        )
+
     def _validate_data(self, rows: List[Dict]) -> List[Dict]:
-        """
-        Basic validation function that normalizes headers and checks if data matches repository model.
-        """
+        """Basic validation function that normalizes headers and checks if data matches repository model."""
         if not rows:
             return []
         try:

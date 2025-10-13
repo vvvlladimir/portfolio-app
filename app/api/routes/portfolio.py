@@ -35,34 +35,12 @@ def rebuild_portfolio_history(
     """
     try:
         price_repo = factory.get_price_repository()
-        stmt = (
-            select(
-                Price.date,
-                Price.ticker,
-                cast(Price.close, Float).label("close")
-            )
-        )
-        result = price_repo.db.execute(stmt)
-        columns = [col.key for col in stmt.selected_columns]
-        df_prices = pd.DataFrame(result.all(), columns=columns)
+        stmt = select(Price)
+        df_prices = pd.read_sql(stmt, price_repo.db.bind)
 
         pos_repo = factory.get_position_repository()
-        stmt = (
-            select(
-                Position.date,
-                Position.ticker,
-                cast(Position.shares, Float).label("shares"),
-                cast(Position.close, Float).label("close"),
-                cast(Position.gross_invested, Float).label("gross_invested"),
-                cast(Position.gross_withdrawn, Float).label("gross_withdrawn"),
-                TickerInfo.currency
-            )
-            .join(TickerInfo, Position.ticker == TickerInfo.ticker)
-        )
-
-        result = pos_repo.db.execute(stmt)
-        columns = [col.key for col in stmt.selected_columns]
-        df_positions = pd.DataFrame(result.all(), columns=columns)
+        stmt = select(Position, TickerInfo).join(TickerInfo)
+        df_positions = pd.read_sql(stmt, pos_repo.db.bind)
 
         df = calculate_portfolio_history(df_positions, df_prices, base_currency=base_currency, factory=factory)
 

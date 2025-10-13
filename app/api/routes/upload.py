@@ -16,10 +16,7 @@ async def upload_transactions_csv(
         file: UploadFile = File(...),
         factory: RepositoryFactory = Depends(get_factory),
 ):
-    """
-    Загрузить CSV с транзакциями. Ожидаемые колонки:
-      date, type, ticker, shares, value, currency
-    """
+    """date, type, ticker, shares, value, currency"""
     try:
         content = await file.read()
         df = pd.read_csv(StringIO(content.decode("utf-8")))
@@ -44,7 +41,8 @@ async def upload_transactions_csv(
         ]
 
         repo = factory.get_transaction_repository()
-        inserted = repo.bulk_insert_transactions(rows)
+        print(rows)
+        inserted = repo.upsert_bulk(rows)
 
         return {"status": "ok", "inserted": inserted}
     except HTTPException:

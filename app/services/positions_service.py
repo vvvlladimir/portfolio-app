@@ -72,3 +72,42 @@ def calculate_positions(
     df_positions["date"] = pd.to_datetime(df_positions["date"])
 
     return df_positions
+
+def get_snapshot_positions(
+        df_positions: pd.DataFrame,
+        df_prices: pd.DataFrame,
+        asof_date: pd.Timestamp = pd.Timestamp.today(),
+) -> pd.DataFrame:
+
+    """Return a snapshot of current positions with market values."""
+    if asof_date is None:
+        asof_date = df_prices["date"].max()
+    asof_date = pd.Timestamp(asof_date)
+
+    df_positions["date"] = pd.to_datetime(df_positions["date"], errors="coerce")
+    df_positions = df_positions[df_positions["date"] <= asof_date]
+
+    df_positions["cum_invested"] = df_positions.groupby("ticker")["gross_invested"].cumsum()
+    df_positions["cum_withdrawn"] = df_positions.groupby("ticker")["gross_withdrawn"].cumsum()
+
+    df_positions['date'] = asof_date
+    df_positions = df_positions.rename(columns={"date": "asof_date"})
+    df_positions = df_positions.groupby("ticker", as_index=False).tail(1).sort_values(["asof_date","ticker"])
+
+    df_positions["asof_date"] = pd.to_datetime(df_positions["asof_date"]).astype("datetime64[ns]")
+    df_prices["date"] = pd.to_datetime(df_prices["date"]).astype("datetime64[ns]")
+
+    df_positions = pd.merge_asof(
+        df_positions.drop(columns=["close"]),
+        df_prices.sort_values(["date", "ticker"]),
+        left_on="asof_date",
+        right_on="date",
+        by="ticker",
+        direction="backward",
+    )
+
+    df_positions["value"] = df_positions["shares"] * df_positions["close"]
+    df_positions["total_pnl"] = (
+            df_positions["value"] + df_positions["cum_withdrawn"] - df_positions["cum_invested"]
+    )
+    return df_positions

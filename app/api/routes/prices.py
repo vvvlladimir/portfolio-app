@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -12,8 +12,8 @@ router = APIRouter()
 @router.get("/")
 def list_prices(
         tickers: Optional[List[str]] = Query(default=None),
-        date_from: Optional[date] = None,
-        date_to: Optional[date] = None,
+        date_from: Optional[date] = (date.today() - timedelta(days=1)),
+        date_to: Optional[date] = date.today(),
         factory: RepositoryFactory = Depends(get_factory),
 ):
     """Get price rows filtered by optional tickers and date range."""
