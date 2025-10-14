@@ -6,7 +6,7 @@ class Transaction(Base):
     __tablename__ = "transactions"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    date = Column(Date, nullable=False)
+    date = Column(Date, primary_key=True, nullable=False)
     type = Column(String, nullable=False)
     ticker = Column(String, ForeignKey("tickers.ticker"), nullable=False)
     currency = Column(String, nullable=False)

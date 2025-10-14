@@ -1,3 +1,4 @@
+from datetime import date, timedelta
 from typing import List
 from itertools import combinations
 import pandas as pd
@@ -15,6 +16,7 @@ def fetch_prices(tickers: List[str], period="5y", interval="1d") -> pd.DataFrame
         interval=interval,
         progress=False,
         prepost=True,
+        end=(date.today() - timedelta(days=1)).isoformat(),
     )
     if data.empty:
         raise ValueError("No data found")
