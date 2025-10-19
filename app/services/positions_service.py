@@ -25,7 +25,7 @@ def calculate_positions(
     
     df_positions['fx_ticker'] = df_positions['currency'] + df_positions['market_currency'] + "=X"
     df_positions = pd.merge_asof(
-        df_positions,
+        df_positions.sort_values(["date"]),
         df_fx,
         on='date',
         by='fx_ticker',
@@ -33,7 +33,7 @@ def calculate_positions(
     ).rename(columns={'rate': 'rate_direct'})
     df_positions['fx_ticker'] = df_positions['market_currency'] + df_positions['currency'] + "=X"
     df_positions = pd.merge_asof(
-        df_positions,
+        df_positions.sort_values(["date"]),
         df_fx,
         on='date',
         by='fx_ticker',

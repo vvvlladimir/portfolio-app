@@ -112,7 +112,8 @@ class TransactionRepository(BaseRepository[Transaction]):
         """
 
         return super().upsert_bulk(
-            data=data
+            data=data,
+            validate_fn=self._validate_prices
         )
 
     def _validate_prices(self, rows: List[Dict]) -> List[Dict]:

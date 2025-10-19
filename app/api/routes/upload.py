@@ -41,7 +41,6 @@ async def upload_transactions_csv(
         ]
 
         repo = factory.get_transaction_repository()
-        print(rows)
         inserted = repo.upsert_bulk(rows)
 
         return {"status": "ok", "inserted": inserted}
