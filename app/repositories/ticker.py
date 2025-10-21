@@ -30,6 +30,7 @@ class TickerRepository(BaseRepository[TickerInfo]):
 
             for key, value in filters.items():
                 if key in mapping and value:
+                    # TODO: fix normalization
                     query = query.filter(mapping[key] == self.normalize_value(value))
             return query.order_by(TickerInfo.ticker).all()
 

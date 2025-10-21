@@ -22,6 +22,18 @@ services:
     networks:
       - portfolio-network
 
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    networks:
+      - portfolio-network
+
   migrations:
     build: .
     depends_on:
@@ -40,10 +52,14 @@ services:
     depends_on:
       migrations:
         condition: service_completed_successfully
+      redis:
+        condition: service_started
     env_file:
       - .env
     environment:
       DB_HOST: db
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
     ports:
       - "8000:8000"
     restart: unless-stopped
@@ -53,6 +69,7 @@ services:
 
 volumes:
   pgdata:
+  redis-data:
 
 networks:
   portfolio-network:

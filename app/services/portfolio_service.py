@@ -197,7 +197,7 @@ def calculate_portfolio_weights(
         df_prices=df_prices,
         df_fx=df_fx,
         base_currency=base_currency,
-        expand_daily=False
+        expand_daily=True
     )
 
     base["total_value"] = base.groupby("date")["value"].transform("sum")

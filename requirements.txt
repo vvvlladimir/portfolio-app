@@ -13,3 +13,4 @@ python-multipart==0.0.20
 mcp==1.16.0
 fastmcp==2.12.4
 python-slugify==8.0.4
+redis==6.4.0

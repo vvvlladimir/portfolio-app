@@ -3,13 +3,15 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.dependencies import get_factory
+from app.managers.cache_manager import CacheManager
 from app.repositories.factory import RepositoryFactory
 from app.core.logger import logger
+from app.schemas.prices import PricesOut
 
 router = APIRouter()
+cache = CacheManager(prefix="prices")
 
-
-@router.get("/")
+@router.get("/", response_model=List[PricesOut])
 def list_prices(
         tickers: Optional[List[str]] = Query(default=None),
         date_from: Optional[date] = (date.today() - timedelta(days=1)),
@@ -18,9 +20,16 @@ def list_prices(
 ):
     """Get price rows filtered by optional tickers and date range."""
     try:
+        cached = cache.get(tickers, date_from, date_to)
+        if cached:
+            return [PricesOut.model_validate(r) for r in cached]
+
         repo = factory.get_price_repository()
         rows = repo.get_prices_by_filters(tickers=tickers, date_from=date_from, date_to=date_to)
-        return rows
+        records = [PricesOut.model_validate(r).model_dump(mode="json") for r in rows]
+
+        cache.set(records,tickers, date_from, date_to, ttl=300)
+        return records
     except Exception as e:
         logger.error(f"list_prices failed: {e}", exc_info=True)
         raise HTTPException(500, detail="Failed to list prices")
@@ -51,6 +60,7 @@ def refresh_market_data(
         except Exception as e:
             logger.error(f"Failed to refresh prices for {tickers}: {e}")
 
+        cache.clear()
         result = {
             "status": "success",
             "total_tickers": len(tickers),

@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import cast, Float, select
 
 from app.api.dependencies import get_factory
+from app.managers.cache_manager import CacheManager
 from app.models import Price, Position, TickerInfo
 from app.repositories.factory import RepositoryFactory
 from app.schemas.portfolio import PortfolioHistoryOut, PortfolioHistoryResponse, PortfolioWeightsOut
@@ -13,15 +14,24 @@ from app.services.portfolio_service import calculate_portfolio_history, calculat
 from app.services.positions_service import get_snapshot_positions
 
 router = APIRouter()
-
+cache = CacheManager(prefix="portfolio")
 
 @router.get("/history", response_model=PortfolioHistoryResponse)
 def get_portfolio_history(factory: RepositoryFactory = Depends(get_factory)):
     try:
+        cached = cache.get()
+        if cached:
+            return PortfolioHistoryResponse(
+                currency="USD",
+                history=[PortfolioHistoryOut.model_validate(r) for r in cached]
+            )
+
         repo = factory.get_portfolio_history_repository()
         rows = repo.get_all()
 
-        # TODO: add get currency func.
+        records = [PortfolioHistoryOut.model_validate(r).model_dump(mode="json") for r in rows]
+        cache.set(records, ttl=300)
+
         return PortfolioHistoryResponse(
             currency="USD",
             history=[PortfolioHistoryOut.model_validate(r) for r in rows]
@@ -33,6 +43,10 @@ def get_portfolio_history(factory: RepositoryFactory = Depends(get_factory)):
 @router.get("/weights", response_model=List[PortfolioWeightsOut])
 def get_portfolio_history(factory: RepositoryFactory = Depends(get_factory)):
     try:
+        cached = cache.get("weights")
+        if cached:
+            return [PortfolioWeightsOut.model_validate(r) for r in cached]
+
         price_repo = factory.get_price_repository()
         stmt = select(Price)
         df_prices = pd.read_sql(stmt, price_repo.db.bind)
@@ -43,7 +57,11 @@ def get_portfolio_history(factory: RepositoryFactory = Depends(get_factory)):
 
         snapshot = get_snapshot_positions(df_positions, df_prices)
         data = calculate_portfolio_weights(snapshot, df_prices, factory=factory)
-        return [PortfolioWeightsOut.model_validate(r) for r in data.to_dict(orient="records")]
+        records = data.to_dict(orient="records")
+
+        cache.set(records, "weights", ttl=300)
+
+        return [PortfolioWeightsOut.model_validate(r) for r in records]
     except Exception as e:
         logger.error(f"get_portfolio_weights failed: {e}", exc_info=True)
         raise HTTPException(500, detail="Failed to fetch portfolio weights")
@@ -71,6 +89,8 @@ def rebuild_portfolio_history(
         hist_repo = factory.get_portfolio_history_repository()
         hist_repo.delete_all()
         inserted = hist_repo.upsert_bulk(df)
+        cache.clear()
+
         return {"status": "ok", "rows": inserted, "base_currency": base_currency}
     except Exception as e:
         logger.error(f"rebuild_portfolio_history failed: {e}", exc_info=True)

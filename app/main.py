@@ -9,6 +9,7 @@ from app.api import api_router
 from app.core.config import settings
 from app.core.db import SessionLocal
 from app.core.logger import logger
+from app.core.redis_client import test_redis_connection
 # from app.mcp_server import mcp
 from app.scripts.init_db import init_db
 
@@ -30,6 +31,9 @@ async def lifespan(app: FastAPI):
     with SessionLocal() as db:
         init_timescale(db)
     logger.info("Database initialized and TimescaleDB ready.")
+
+    test_redis_connection()
+
     yield
     logger.info("Shutting down Portfolio API.")
 
@@ -56,9 +60,6 @@ async def add_ngrok_header(request: Request, call_next):
     return response
 
 app.include_router(api_router)
-
-# mcp_app = mcp.http_app(path="/mcp")
-# app.mount("/mcp", mcp_app)
 @app.get("/")
 async def root():
     return {"message": "Portfolio API is running", "version": "1.0.0"}
