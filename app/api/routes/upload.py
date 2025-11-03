@@ -1,6 +1,7 @@
 from io import StringIO
 from typing import List
 
+import dateparser
 import pandas as pd
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
@@ -21,12 +22,20 @@ async def upload_transactions_csv(
         content = await file.read()
         df = pd.read_csv(StringIO(content.decode("utf-8")))
 
-        required = {"date", "type", "ticker", "shares", "value", "currency"}
-        if not required.issubset(set(map(str.lower, df.columns))):
-            raise HTTPException(400, detail=f"CSV must contain columns: {required}")
-
         cols = {c: c.lower() for c in df.columns}
         df = df.rename(columns=cols)
+
+        required = {"date", "type", "ticker", "shares", "value", "currency"}
+        if not required.issubset(set(map(str.lower, df.columns))):
+            raise HTTPException(400, f"CSV must contain columns: {required}")
+
+        df["date"] = df["date"].astype(str).apply(
+            lambda x: dateparser.parse(x, settings={"DATE_ORDER": "YMD"}).date()
+        )
+
+        if df["date"].isna().any():
+            bad_rows = df[df["date"].isna()]
+            raise HTTPException(400, f"Incorrect Data Format: {bad_rows.index.tolist()}")
 
         rows = [
             {

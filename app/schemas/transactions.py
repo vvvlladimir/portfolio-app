@@ -29,6 +29,5 @@ class TransactionsOut(BaseModel):
     currency: str | None
     shares: float | None
     value: float | None
-    ticker_info: Optional[TickerOut] = None
 
     model_config = ConfigDict(from_attributes=True)
