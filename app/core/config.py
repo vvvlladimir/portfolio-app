@@ -12,7 +12,10 @@ class Settings:
 
     @property
     def DATABASE_URL(self) -> str:
-        return f"postgresql://{self.DB_USER}:{self.DB_PASSWORD}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
+        return (
+            f"postgresql://{self.DB_USER}:{self.DB_PASSWORD}"
+            f"@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
+        )
 
     # --- Redis ---
     REDIS_HOST: str = config("REDIS_HOST", default="localhost")
@@ -25,8 +28,31 @@ class Settings:
     def REDIS_URL(self) -> str:
         scheme = "rediss" if self.REDIS_USE_TLS else "redis"
         if self.REDIS_PASSWORD:
-            return f"{scheme}://:{self.REDIS_PASSWORD}@{self.REDIS_HOST}:{self.REDIS_PORT}/{self.REDIS_DB}"
+            return (
+                f"{scheme}://:{self.REDIS_PASSWORD}@"
+                f"{self.REDIS_HOST}:{self.REDIS_PORT}/{self.REDIS_DB}"
+            )
         return f"{scheme}://{self.REDIS_HOST}:{self.REDIS_PORT}/{self.REDIS_DB}"
+
+    # --- Celery ---
+    CELERY_BROKER_URL: str = config(
+        "CELERY_BROKER_URL",
+        default=f"redis://{REDIS_HOST}:{REDIS_PORT}/0"
+    )
+
+    CELERY_RESULT_BACKEND: str = config(
+        "CELERY_RESULT_BACKEND",
+        default=f"redis://{REDIS_HOST}:{REDIS_PORT}/1"
+    )
+
+    CELERY_TIMEZONE: str = config("CELERY_TIMEZONE", default="UTC")
+    CELERY_ENABLE_UTC: bool = config("CELERY_ENABLE_UTC", default=True, cast=bool)
+
+    CELERY_BEAT_ENABLED: bool = config("CELERY_BEAT_ENABLED", default=True, cast=bool)
+
+    CELERY_WORKER_CONCURRENCY: int = config(
+        "CELERY_WORKER_CONCURRENCY", default=1, cast=int
+    )
 
     # --- Logging & Debug ---
     SQL_ECHO: bool = config("SQL_ECHO", default=False, cast=bool)

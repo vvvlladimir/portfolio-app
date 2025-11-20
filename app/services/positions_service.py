@@ -16,8 +16,8 @@ def _build_portfolio_timeseries(
         end_date: Optional[pd.Timestamp] = None,
 ) -> pd.DataFrame:
     """
-    Строим календарь ticker × date и к нему подтягиваем позиции и цены.
-    ВАЖНО: строим только до end_date (или до макс даты из позиций/цен).
+    We build a ticker × date calendar and pull up positions and prices to it.
+    IMPORTANT: we only build up to end_date (or up to the maximum date from positions/prices).
     """
     positions = df_positions.copy()
     prices = df_prices.copy()
@@ -81,10 +81,9 @@ def calculate_positions(
         factory: RepositoryFactory = Depends(get_factory),
 ) -> pd.DataFrame:
     """
-    Считаем позиции по дням из транзакций и цен.
-    Здесь же приводим всё к валюте тикера через FX.
+    We calculate positions by day based on transactions and prices.
+    Here, we convert everything to the ticker currency via FX.
     """
-    # узнаём рыночную валюту тикера
     ticker_currency = df_prices.groupby("ticker")["currency"].first()
 
     tx = df_transactions.copy()
@@ -94,10 +93,8 @@ def calculate_positions(
         market_currency=tx["ticker"].map(ticker_currency)
     )
 
-    # валюты, которые нам вообще нужны
     currencies = set(tx["currency"].dropna().unique()) | set(tx["market_currency"].dropna().unique())
 
-    # тянем курсы
     fx_service = FXRateService(factory)
     df_fx = fx_service.get_fx_rates(
         currencies,
@@ -105,8 +102,6 @@ def calculate_positions(
         start_date=tx["date"].min(),
     )
 
-    # конвертируем value -> валюта рынка
-    # 1) пробуем прямую пару
     tx["fx_ticker"] = tx["currency"] + tx["market_currency"] + "=X"
     tx = pd.merge_asof(
         tx.sort_values("date"),
@@ -116,7 +111,6 @@ def calculate_positions(
         direction="nearest",
     ).rename(columns={"rate": "rate_direct"})
 
-    # 2) пробуем обратную пару
     tx["fx_ticker"] = tx["market_currency"] + tx["currency"] + "=X"
     tx = pd.merge_asof(
         tx.sort_values("date"),
@@ -129,17 +123,14 @@ def calculate_positions(
     tx["rate"] = (tx["rate_direct"].fillna(1 / tx["rate_inverse"])).fillna(1.0)
     tx["value"] = tx["value"] * tx["rate"]
 
-    # оставляем базовые колонки
     tx = tx[["date", "ticker", "value", "type", "shares"]]
 
-    # подтягиваем цену на дату сделки — для проверки и чтобы можно было потом восстановить
     tx = tx.merge(
         df_prices[["date", "ticker", "close"]],
         on=["date", "ticker"],
         how="left",
     )
 
-    # приводим BUY/SELL к знаку
     tx = (
         tx.assign(
             shares=lambda x: x["shares"].where(x["type"] == "BUY", -x["shares"]),
@@ -158,24 +149,18 @@ def calculate_positions(
         .sort_values(["ticker", "date"])
     )
 
-    # накопительные итоги
     tx[["shares", "cum_invested", "cum_withdrawn"]] = (
         tx.groupby("ticker")[["shares", "gross_invested", "gross_withdrawn"]].cumsum()
     )
 
-    # рыночная стоимость
     tx["value"] = tx["shares"] * tx["close"]
 
-    # PnL: MV + withdrawals - invested
     tx["total_pnl"] = (
             tx["value"] + tx["cum_withdrawn"] - tx["cum_invested"]
     )
 
     tx["date"] = pd.to_datetime(tx["date"])
-
-    # дневной денежный поток (понадобится для TWR)
     tx["cashflow"] = tx["gross_invested"] - tx["gross_withdrawn"]
-
     return tx
 
 
@@ -187,8 +172,8 @@ def get_snapshot_positions(
         get_last: bool = False,
 ) -> pd.DataFrame:
     """
-    Возвращает позиции по дням (или только последнюю строку по тикеру),
-    гарантируя, что строим только до date_to.
+    Returns positions by day (or only the last row by ticker),
+    ensuring that we only build up to date_to.
     """
     date_to = pd.Timestamp(date_to)
 
@@ -199,19 +184,15 @@ def get_snapshot_positions(
         end_date=date_to,
     )
 
-    # накопительные итоги
     df_ts["cum_invested"] = df_ts.groupby("ticker")["gross_invested"].cumsum()
     df_ts["cum_withdrawn"] = df_ts.groupby("ticker")["gross_withdrawn"].cumsum()
 
-    # рыночная стоимость (цена может ffill’нуться)
     df_ts["value"] = df_ts["shares"] * df_ts["close"]
 
-    # pnl
     df_ts["total_pnl"] = (
             df_ts["value"] + df_ts["cum_withdrawn"] - df_ts["cum_invested"]
     )
 
-    # поток за день
     df_ts["cashflow"] = df_ts["gross_invested"] - df_ts["gross_withdrawn"]
 
     if get_last:
@@ -220,18 +201,12 @@ def get_snapshot_positions(
     return df_ts
 
 
-# ---------- 4. Хелпер для TWR по одному тикеру ----------
 
 def compute_twr_for_window(
         df_one_ticker: pd.DataFrame,
         start_date: pd.Timestamp,
         end_date: pd.Timestamp,
 ) -> Optional[float]:
-    """
-    Честный TWR: выкидывает влияние внесений/выводов.
-    Ожидает колонки: date, value, gross_invested, gross_withdrawn.
-    Возвращает число (0.1234 = 12.34%) или None.
-    """
     df = df_one_ticker.copy()
     df["date"] = pd.to_datetime(df["date"])
 
@@ -254,17 +229,12 @@ def compute_twr_for_window(
     return float(twr)
 
 
-# ---------- 5. Построение stats для всех тикеров ----------
 
 def build_positions_stats(
         df_ts: pd.DataFrame,
         as_of: pd.Timestamp,
         periods: Optional[Dict[str, int]] = None,
 ) -> List[dict]:
-    """
-    df_ts — уже дневной таймсерис по ВСЕМ тикерам до as_of.
-    Возвращает список словарей по тикерам со всеми цифрами.
-    """
     if periods is None:
         periods = {
             "1W": 7,
