@@ -73,7 +73,7 @@ def positions_stats(
         factory: RepositoryFactory = Depends(get_factory),
 ):
     """
-    Подробная портфельная статистика «по-тикерно» с TWR и денежными потоками.
+    Return statistics about positions as of a specific date.
     """
     try:
         cached = cache.get("stats", date_to.isoformat())

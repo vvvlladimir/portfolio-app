@@ -14,9 +14,13 @@ class PortfolioHistoryOut(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
-class PortfolioWeightsOut(BaseModel):
-    ticker: str
-    weight: float | None
+class PortfolioWeightsRow(BaseModel):
+    date: date
+    weights: List[float]
+
+class PortfolioWeightsResponse(BaseModel):
+    tickers: List[str]
+    rows: List[PortfolioWeightsRow]
 
 class PortfolioHistoryResponse(BaseModel):
     currency: str

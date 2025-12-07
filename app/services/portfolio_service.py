@@ -176,6 +176,7 @@ def calculate_portfolio_weights(
         df_positions: pd.DataFrame,
         df_prices: pd.DataFrame,
         base_currency: str = "USD",
+        latest: bool =True,
         factory: RepositoryFactory = Depends(get_factory),
 ) -> pd.DataFrame:
     """
@@ -202,12 +203,11 @@ def calculate_portfolio_weights(
 
     base["total_value"] = base.groupby("date")["value"].transform("sum")
     base["weight"] = base["value"] / base["total_value"]
-
-    # return weights on the latest date
-    latest = (
+    if latest:
+        base = base.groupby("ticker", as_index=False).last()
+    return (
         base.sort_values(["ticker", "date"])
-        .groupby("ticker", as_index=False)
-        .last()[["ticker", "weight"]]
+        .set_index(["date", "ticker"])["weight"].unstack().fillna(0).reset_index()
     )
-    return latest
+
 

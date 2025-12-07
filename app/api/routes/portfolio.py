@@ -1,3 +1,4 @@
+from pprint import pprint
 from typing import List, Optional
 
 import pandas as pd
@@ -8,7 +9,7 @@ from app.api.dependencies import get_factory
 from app.managers.cache_manager import CacheManager
 from app.models import Price, Position, TickerInfo
 from app.repositories.factory import RepositoryFactory
-from app.schemas.portfolio import PortfolioHistoryOut, PortfolioHistoryResponse, PortfolioWeightsOut
+from app.schemas.portfolio import PortfolioHistoryOut, PortfolioHistoryResponse, PortfolioWeightsResponse
 from app.core.logger import logger
 from app.services.portfolio_service import calculate_portfolio_history, calculate_portfolio_weights
 from app.services.positions_service import get_snapshot_positions
@@ -40,12 +41,21 @@ def get_portfolio_history(factory: RepositoryFactory = Depends(get_factory)):
         logger.error(f"get_portfolio_history failed: {e}", exc_info=True)
         raise HTTPException(500, detail="Failed to fetch portfolio history")
 
-@router.get("/weights", response_model=List[PortfolioWeightsOut])
-def get_portfolio_history(factory: RepositoryFactory = Depends(get_factory)):
+@router.get("/weights", response_model=PortfolioWeightsResponse)
+def get_portfolio_weights(
+        get_last: bool = Query(True, description="Return only latest weights or full history"),
+        factory: RepositoryFactory = Depends(get_factory),
+):
+    """
+    Returns either:
+    - latest weights per ticker: [{ticker, weight}]
+    - full historical weights in wide format: [{date, TICKER1, TICKER2, ...}]
+    """
+
     try:
-        cached = cache.get("weights")
+        cached = cache.get("weights", get_last)
         if cached:
-            return [PortfolioWeightsOut.model_validate(r) for r in cached]
+            return cached
 
         price_repo = factory.get_price_repository()
         stmt = select(Price)
@@ -55,17 +65,27 @@ def get_portfolio_history(factory: RepositoryFactory = Depends(get_factory)):
         stmt = select(Position, TickerInfo).join(TickerInfo)
         df_positions = pd.read_sql(stmt, pos_repo.db.bind)
 
-        snapshot = get_snapshot_positions(df_positions, df_prices)
-        data = calculate_portfolio_weights(snapshot, df_prices, factory=factory)
-        records = data.to_dict(orient="records")
+        data = calculate_portfolio_weights(
+            df_positions=df_positions,
+            df_prices=df_prices,
+            latest=get_last,
+            factory=factory
+        )
 
-        cache.set(records, "weights", ttl=300)
-
-        return [PortfolioWeightsOut.model_validate(r) for r in records]
+        tickers = data.columns[data.columns != "date"].tolist()
+        weights_matrix = data[tickers].to_numpy(dtype=float)
+        dates = data["date"].tolist()
+        rows = [
+            {"date": d, "weights": w.tolist()}
+            for d, w in zip(dates, weights_matrix)
+        ]
+        return PortfolioWeightsResponse(
+            tickers=tickers,
+            rows=rows,
+        )
     except Exception as e:
         logger.error(f"get_portfolio_weights failed: {e}", exc_info=True)
         raise HTTPException(500, detail="Failed to fetch portfolio weights")
-
 
 @router.post("/history/rebuild")
 def rebuild_portfolio_history(
